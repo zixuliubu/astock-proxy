@@ -20,6 +20,8 @@ const handlers = {
   'stock-popularity': () => require('./stock-popularity'),
   'stock-capital-flow': () => require('./stock-capital-flow'),
   'stock-news': () => require('./stock-news'),
+  'stock-kline': () => require('./stock-kline'),
+  'review-rules': () => require('./review-rules'),
   openapi: () => require('./openapi'),
 };
 
