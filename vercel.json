@@ -1,12 +1,16 @@
 {
   "version": 2,
-  "builds": [{ "src": "api/**/*.js", "use": "@vercel/node" }],
+  "builds": [
+    { "src": "api/router.js", "use": "@vercel/node" },
+    { "src": "api/mcp.js", "use": "@vercel/node" },
+    { "src": "api/openapi.js", "use": "@vercel/node" }
+  ],
   "routes": [
     { "src": "/mcp", "status": 404 },
     { "src": "/api/mcp", "status": 404 },
     { "src": "/api/mcp.js", "status": 404 },
     { "src": "/mcp-laoda-20260708-x7k29q", "dest": "/api/mcp.js" },
     { "src": "/openapi.json", "dest": "/api/openapi.js" },
-    { "src": "/api/(.*)", "dest": "/api/$1.js" }
+    { "src": "/api/(.*)", "dest": "/api/router.js?endpoint=$1" }
   ]
 }
