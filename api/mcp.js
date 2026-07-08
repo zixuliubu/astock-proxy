@@ -1,6 +1,6 @@
 const ASTOCK_BASE_URL = process.env.ASTOCK_BASE_URL || 'https://astock-proxy.vercel.app';
 const SERVER_NAME = 'astock-mcp';
-const SERVER_VERSION = '1.3.0';
+const SERVER_VERSION = '1.4.0';
 const PRIVATE_MCP_PATH = '/mcp-laoda-20260708-x7k29q';
 
 function emptyInputSchema() {
@@ -27,6 +27,41 @@ function genericObjectOutputSchema(extraProperties = {}) {
 }
 
 const tools = [
+  {
+    name: 'get_daily_review_bundle',
+    title: '获取一键短线复盘聚合包',
+    description: '一键聚合今日短线复盘所需数据：大盘指数和成交额、情绪、涨停池、炸板池、跌停池、连板梯队、热门板块、核心观察票、消息催化、龙虎榜、盘中节点时间线。适用于用户说“复盘今天”“开搞”“今天盘面怎么变化”。优先使用此工具，避免一次复盘调用过多工具导致变慢。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        date: { type: 'string', description: '日期，格式 YYYYMMDD，例如 20260708。不填默认今日。' },
+        group: { type: 'string', description: '观察池预设组：default、semiconductor、robot、ai_compute、innovation_drug、fluorochemical、paper、market_core。默认 default。' },
+        symbols: { type: 'string', description: '自定义观察股票代码，多个用英文逗号分隔，例如 sh600584,sz002185,sz002407。传 symbols 时优先使用自定义列表。' },
+        raw: { type: 'boolean', description: '是否返回原始完整数据。默认 false；复盘时建议 false，速度更快、上下文更省。' },
+      },
+      required: [],
+      additionalProperties: false,
+    },
+    outputSchema: genericObjectOutputSchema({
+      date: { type: 'string' },
+      mode: { type: 'string' },
+      cached: { type: 'boolean' },
+      marketOverview: { type: 'object', additionalProperties: true },
+      marketSentiment: { type: 'object', additionalProperties: true },
+      lianbanLadder: { type: 'object', additionalProperties: true },
+      limitUpPool: { type: 'object', additionalProperties: true },
+      brokenLimitPool: { type: 'object', additionalProperties: true },
+      limitDownPool: { type: 'object', additionalProperties: true },
+      hotSectors: { type: 'object', additionalProperties: true },
+      coreWatchlist: { type: 'object', additionalProperties: true },
+      newsCatalysts: { type: 'object', additionalProperties: true },
+      dragonTiger: { type: 'object', additionalProperties: true },
+      intradayTimeline: { type: 'object', additionalProperties: true },
+      reviewHints: { type: 'array', items: { type: 'string' } },
+      diagnostics: { type: 'object', additionalProperties: true },
+    }),
+    annotations: { readOnlyHint: true },
+  },
   {
     name: 'get_stock_quote',
     title: '获取A股个股实时行情',
@@ -195,7 +230,7 @@ async function fetchJson(path, query = {}) {
     if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value));
   });
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
+  const timeout = setTimeout(() => controller.abort(), 20000);
   try {
     const response = await fetch(url.toString(), { method: 'GET', headers: { Accept: 'application/json' }, signal: controller.signal });
     const text = await response.text();
@@ -211,6 +246,7 @@ async function fetchJson(path, query = {}) {
 }
 
 async function callTool(name, args = {}) {
+  if (name === 'get_daily_review_bundle') return fetchJson('/api/daily-review-bundle', { date: args.date, group: args.group, symbols: args.symbols, raw: args.raw === true ? 'true' : undefined });
   if (name === 'get_stock_quote') return fetchJson('/api/quote', { symbols: args.symbols, detail: args.detail === true ? 'true' : undefined });
   if (name === 'get_market_overview') return fetchJson('/api/market-overview');
   if (name === 'get_limit_up_pool') return fetchJson('/api/limit-up', { date: args.date });
