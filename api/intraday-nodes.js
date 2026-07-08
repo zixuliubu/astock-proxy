@@ -1,7 +1,7 @@
 const https = require('https');
 
 const ASTOCK_BASE_URL = process.env.ASTOCK_BASE_URL || 'https://astock-proxy.vercel.app';
-const NODES = ['09:35', '10:35', '11:35', '13:35', '14:35', '15:00'];
+const NODES = ['09:35', '09:45', '09:55', '10:05', '10:15', '10:25', '10:35', '10:45', '10:55', '11:05', '11:15', '11:25', '13:05', '13:15', '13:25', '13:35', '13:45', '13:55', '14:05', '14:15', '14:25', '14:35', '14:45', '14:55', '15:00'];
 
 function fetchJson(pathOrUrl, headers = {}) {
   return new Promise((resolve, reject) => {
@@ -77,7 +77,7 @@ module.exports = async (req, res) => {
       ...nodeInfo,
       snapshot,
       brief: briefFromData(snapshot),
-      limitation: '当前版本只返回请求时刻快照；真正的9:35/10:35/11:35/13:35/14:35节点变化，需要后续增加定时采集和持久化存储。',
+      limitation: '当前版本返回请求时刻快照；10分钟级真实时间线由 capture-node + intraday-timeline 保存和读取。',
       updateTime: new Date().toISOString(),
     });
   } catch (e) {
