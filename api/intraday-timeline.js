@@ -1,7 +1,7 @@
 const REDIS_URL = process.env.UPSTASH_REDIS_REST_URL;
 const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
 const CAPTURE_SECRET = process.env.CAPTURE_SECRET;
-const DEFAULT_NODES = ['09:35', '10:35', '11:35', '13:35', '14:35', '15:00'];
+const DEFAULT_NODES = ['09:35', '09:45', '09:55', '10:05', '10:15', '10:25', '10:35', '10:45', '10:55', '11:05', '11:15', '11:25', '13:05', '13:15', '13:25', '13:35', '13:45', '13:55', '14:05', '14:15', '14:25', '14:35', '14:45', '14:55', '15:00'];
 
 function json(res, status, body) {
   res.statusCode = status;
@@ -14,6 +14,14 @@ function chinaDate() {
     timeZone: 'Asia/Shanghai', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit',
   }).formatToParts(new Date()).reduce((acc, p) => ({ ...acc, [p.type]: p.value }), {});
   return `${parts.year}${parts.month}${parts.day}`;
+}
+
+function nodeSortValue(node) {
+  const idx = DEFAULT_NODES.indexOf(node);
+  if (idx >= 0) return idx;
+  const [h, m] = String(node || '').split(':').map(Number);
+  if (Number.isFinite(h) && Number.isFinite(m)) return h * 60 + m;
+  return 9999;
 }
 
 function checkReadAuth(req) {
@@ -122,7 +130,7 @@ module.exports = async (req, res) => {
     const raw = await redisCommand(['GET', key]);
     const timeline = raw ? JSON.parse(raw) : [];
     const sorted = Array.isArray(timeline)
-      ? timeline.sort((a, b) => DEFAULT_NODES.indexOf(a.node) - DEFAULT_NODES.indexOf(b.node))
+      ? timeline.sort((a, b) => nodeSortValue(a.node) - nodeSortValue(b.node))
       : [];
     const changes = buildChanges(sorted);
     return json(res, 200, {
