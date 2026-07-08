@@ -1,0 +1,62 @@
+name: Capture A-share Intraday Nodes
+
+on:
+  workflow_dispatch:
+    inputs:
+      node:
+        description: 'Node label, for example 09:35, 10:35, 11:35, 13:35, 14:35, 15:00. Leave empty to infer from current UTC time.'
+        required: false
+        type: string
+      date:
+        description: 'Optional trade date in YYYYMMDD. Leave empty for China today.'
+        required: false
+        type: string
+  schedule:
+    # China time: 09:35, 10:35, 11:35, 13:35, 14:35, 15:00.
+    # GitHub Actions cron uses UTC and may be delayed by a few minutes.
+    - cron: '35 1 * * 1-5'
+    - cron: '35 2 * * 1-5'
+    - cron: '35 3 * * 1-5'
+    - cron: '35 5 * * 1-5'
+    - cron: '35 6 * * 1-5'
+    - cron: '0 7 * * 1-5'
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve node
+        id: node
+        shell: bash
+        run: |
+          INPUT_NODE="${{ github.event.inputs.node }}"
+          if [ -n "$INPUT_NODE" ]; then
+            NODE="$INPUT_NODE"
+          else
+            UTC_HM=$(date -u +%H:%M)
+            case "$UTC_HM" in
+              01:35) NODE="09:35" ;;
+              02:35) NODE="10:35" ;;
+              03:35) NODE="11:35" ;;
+              05:35) NODE="13:35" ;;
+              06:35) NODE="14:35" ;;
+              07:00) NODE="15:00" ;;
+              *) NODE="$UTC_HM" ;;
+            esac
+          fi
+          echo "node=$NODE" >> "$GITHUB_OUTPUT"
+
+      - name: Capture node snapshot
+        shell: bash
+        env:
+          CAPTURE_SECRET: ${{ secrets.CAPTURE_SECRET }}
+          INPUT_DATE: ${{ github.event.inputs.date }}
+        run: |
+          URL="https://astock-proxy.vercel.app/api/capture-node?node=${{ steps.node.outputs.node }}"
+          if [ -n "$INPUT_DATE" ]; then
+            URL="$URL&date=$INPUT_DATE"
+          fi
+          echo "Capturing node ${{ steps.node.outputs.node }}"
+          curl -fsS "$URL" \
+            -H "x-capture-token: $CAPTURE_SECRET" \
+            -H "Accept: application/json"
