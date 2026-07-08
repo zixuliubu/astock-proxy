@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       node:
-        description: 'Node label, for example 09:35, 10:35, 11:35, 13:35, 14:35, 15:00. Leave empty to infer from current UTC time.'
+        description: 'Node label, for example 09:35, 09:45, 10:05, 13:05, 14:55, 15:00. Leave empty to infer from current UTC time.'
         required: false
         type: string
       date:
@@ -12,13 +12,14 @@ on:
         required: false
         type: string
   schedule:
-    # China time: 09:35, 10:35, 11:35, 13:35, 14:35, 15:00.
+    # China time, 10-minute snapshots during A-share trading windows:
+    # 09:35-11:25, 13:05-14:55, plus 15:00 close snapshot.
     # GitHub Actions cron uses UTC and may be delayed by a few minutes.
-    - cron: '35 1 * * 1-5'
-    - cron: '35 2 * * 1-5'
-    - cron: '35 3 * * 1-5'
-    - cron: '35 5 * * 1-5'
-    - cron: '35 6 * * 1-5'
+    - cron: '35,45,55 1 * * 1-5'
+    - cron: '5,15,25,35,45,55 2 * * 1-5'
+    - cron: '5,15,25 3 * * 1-5'
+    - cron: '5,15,25,35,45,55 5 * * 1-5'
+    - cron: '5,15,25,35,45,55 6 * * 1-5'
     - cron: '0 7 * * 1-5'
 
 jobs:
@@ -36,10 +37,29 @@ jobs:
             UTC_HM=$(date -u +%H:%M)
             case "$UTC_HM" in
               01:35) NODE="09:35" ;;
+              01:45) NODE="09:45" ;;
+              01:55) NODE="09:55" ;;
+              02:05) NODE="10:05" ;;
+              02:15) NODE="10:15" ;;
+              02:25) NODE="10:25" ;;
               02:35) NODE="10:35" ;;
-              03:35) NODE="11:35" ;;
+              02:45) NODE="10:45" ;;
+              02:55) NODE="10:55" ;;
+              03:05) NODE="11:05" ;;
+              03:15) NODE="11:15" ;;
+              03:25) NODE="11:25" ;;
+              05:05) NODE="13:05" ;;
+              05:15) NODE="13:15" ;;
+              05:25) NODE="13:25" ;;
               05:35) NODE="13:35" ;;
+              05:45) NODE="13:45" ;;
+              05:55) NODE="13:55" ;;
+              06:05) NODE="14:05" ;;
+              06:15) NODE="14:15" ;;
+              06:25) NODE="14:25" ;;
               06:35) NODE="14:35" ;;
+              06:45) NODE="14:45" ;;
+              06:55) NODE="14:55" ;;
               07:00) NODE="15:00" ;;
               *) NODE="$UTC_HM" ;;
             esac
