@@ -1,13 +1,15 @@
 const { json, setCors, buildUrl, requestJson, cached, okBase, num, yi } = require('./_stock-utils');
 
+const EASTMONEY_SEARCH_TOKEN = 'D43BF722C8E33E37D022A0C2FF1AADF6';
+
 function splitList(value, max = 3) {
   return String(value || '').split(/[，,\s]+/).map(x => x.trim()).filter(Boolean).slice(0, max);
 }
 
 function normalizeBoard(row, source = '') {
   return {
-    bk: row.f12 || row.code || '',
-    name: row.f14 || row.name || '',
+    bk: row.f12 || row.code || row.Code || '',
+    name: row.f14 || row.name || row.Name || '',
     source,
     changePct: num(row.f3),
     amountYi: yi(row.f6),
@@ -79,7 +81,6 @@ async function fetchBoardList(kind = 'concept') {
     }
   }
 
-  // 兜底：hotboard 已被现有 /api/sector 证明可用，但它更偏热门板块，概念覆盖可能不完整。
   try {
     const hotFs = kind === 'industry' ? 'm:90+t:2' : 'm:90+t:3';
     const url = buildUrl('https://push2.hsmarketwg.eastmoney.com/api/qt/clist/hotboard/get', {
@@ -105,15 +106,70 @@ async function fetchBoardList(kind = 'concept') {
   return { data: [], attempts, fallbackNote: '板块列表全部上游失败。' };
 }
 
+function collectBkCandidates(node, out = []) {
+  if (!node || out.length >= 20) return out;
+  if (Array.isArray(node)) {
+    for (const item of node) collectBkCandidates(item, out);
+    return out;
+  }
+  if (typeof node === 'object') {
+    const code = String(node.Code || node.code || node.SecurityCode || node.CODE || '');
+    const name = String(node.Name || node.name || node.SecurityName || node.NAME || '');
+    const quoteId = String(node.QuoteID || node.quoteId || node.QuoteId || '');
+    const typeName = String(node.SecurityTypeName || node.TypeName || node.typeName || '');
+    const bk = (code.match(/^BK\d{4}$/i) || quoteId.match(/BK\d{4}/i) || [])[0];
+    if (bk && name && !out.some(x => x.bk.toUpperCase() === bk.toUpperCase())) {
+      out.push({ bk: bk.toUpperCase(), name, source: 'eastmoney_searchapi', typeName, quoteId });
+    }
+    for (const value of Object.values(node)) collectBkCandidates(value, out);
+  }
+  return out;
+}
+
+async function searchBoardsByKeyword(keyword) {
+  const attempts = [];
+  const words = splitList(keyword, 3);
+  const results = [];
+  for (const word of words) {
+    const queries = [...new Set([word, word.replace(/概念$/, ''), `${word.replace(/概念$/, '')}概念`].filter(Boolean))];
+    for (const q of queries) {
+      try {
+        const url = buildUrl('https://searchapi.eastmoney.com/api/suggest/get', {
+          input: q,
+          type: 14,
+          token: EASTMONEY_SEARCH_TOKEN,
+          count: 20,
+        });
+        const data = await requestJson(url, { headers: { 'User-Agent': 'Mozilla/5.0', Referer: 'https://quote.eastmoney.com/' }, timeoutMs: 10000 });
+        const candidates = collectBkCandidates(data, []);
+        attempts.push({ source: 'searchapi', query: q, count: candidates.length });
+        for (const c of candidates) {
+          if (!results.some(x => x.bk === c.bk)) results.push(c);
+        }
+      } catch (err) {
+        attempts.push({ source: 'searchapi', query: q, error: String(err && err.message ? err.message : err) });
+      }
+    }
+  }
+  return { boards: results.slice(0, 3), attempts };
+}
+
 async function resolveBoards({ bk, keyword, kind }) {
   const explicit = splitList(bk, 3).map(x => ({ bk: x.toUpperCase(), name: '', source: 'explicit' })).filter(x => /^BK\d+$/i.test(x.bk));
   if (explicit.length) return { boards: explicit, diagnostics: { explicit: true } };
+
   const words = splitList(keyword, 3);
   if (!words.length) return { boards: [], diagnostics: { error: 'missing keyword or bk' } };
-  const { value } = await cached(`board-list:v2:${kind || 'concept'}`, 5 * 60 * 1000, () => fetchBoardList(kind || 'concept'));
+
+  const searchResolved = await searchBoardsByKeyword(keyword);
+  if (searchResolved.boards.length) {
+    return { boards: searchResolved.boards, diagnostics: { searchapi: searchResolved.attempts, matchedKeywords: words, resolveSource: 'searchapi' } };
+  }
+
+  const { value } = await cached(`board-list:v3:${kind || 'concept'}`, 5 * 60 * 1000, () => fetchBoardList(kind || 'concept'));
   const all = value?.data || [];
   const boards = words.map(w => all.find(b => b.name.includes(w) || b.bk.toUpperCase() === w.toUpperCase())).filter(Boolean).slice(0, 3);
-  return { boards, diagnostics: { attempts: value?.attempts || [], fallbackNote: value?.fallbackNote || '', matchedKeywords: words, boardListCount: all.length } };
+  return { boards, diagnostics: { searchapi: searchResolved.attempts, attempts: value?.attempts || [], fallbackNote: value?.fallbackNote || '', matchedKeywords: words, boardListCount: all.length, resolveSource: boards.length ? 'board-list' : 'none' } };
 }
 
 async function fetchMembers(board, limit = 80) {
@@ -162,35 +218,35 @@ module.exports = async (req, res) => {
     if (!boards.length) {
       return json(res, 200, okBase({
         success: false,
-        mode: 'concept_members_v2',
+        mode: 'concept_members_v3',
         error: 'No matched board. Use ?bk=BKxxxx or a more exact ?keyword=',
         kind,
         limit,
         count: 0,
         data: [],
         diagnostics,
-        note: '没有匹配到板块时不再返回 502；请用更精确板块名或 BK 代码。',
+        note: '没有匹配到板块时不返回 502；本版本已加入东方财富 searchapi 兜底。',
       }));
     }
 
     const data = [];
     for (const board of boards.slice(0, 3)) {
-      const key = `concept-members:v2:${board.bk}:${limit}`;
+      const key = `concept-members:v3:${board.bk}:${limit}`;
       const { value, cached: fromCache } = await cached(key, ttlMs, () => fetchMembers(board, limit));
       data.push({ ...value, cached: fromCache });
     }
 
     return json(res, 200, okBase({
-      mode: 'concept_members_v2',
+      mode: 'concept_members_v3',
       kind,
       limit,
       count: data.length,
       data,
       diagnostics,
       limits: { maxBoards: 3, maxMembersPerBoard: 100, redisWrites: 0 },
-      note: '板块成分股用于验证扩散和梯队，不直接构成买点；若上游失败会返回 diagnostics 而不是 502。',
+      note: '板块成分股用于验证扩散和梯队，不直接构成买点；关键词先走 searchapi 解析 BK 代码，再查成分股。',
     }));
   } catch (err) {
-    return json(res, 200, okBase({ success: false, mode: 'concept_members_v2', error: String(err && err.message ? err.message : err), data: [], diagnostics }));
+    return json(res, 200, okBase({ success: false, mode: 'concept_members_v3', error: String(err && err.message ? err.message : err), data: [], diagnostics }));
   }
 };
