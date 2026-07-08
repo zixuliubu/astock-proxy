@@ -176,7 +176,7 @@ async function buildPlus(req) {
   const raw = req.query.raw === 'true' ? 'true' : undefined;
   const extra = req.query.extra !== 'false';
 
-  const base = await fetchJson('/api/daily-review-bundle', { date, group, symbols, raw }, 20000);
+  const base = await fetchJson('/api/daily-review-bundle-base', { date, group, symbols, raw }, 20000);
   if (!extra || base?.success === false) return base;
 
   const selected = selectCoreSymbols(base, symbols);
