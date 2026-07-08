@@ -14,6 +14,10 @@ const handlers = {
   'capture-node': () => require('./capture-node'),
   'intraday-timeline': () => require('./intraday-timeline'),
   'daily-review-bundle': () => require('./daily-review-bundle'),
+  'stock-concepts': () => require('./stock-concepts'),
+  'stock-popularity': () => require('./stock-popularity'),
+  'stock-capital-flow': () => require('./stock-capital-flow'),
+  'stock-news': () => require('./stock-news'),
   openapi: () => require('./openapi'),
 };
 
