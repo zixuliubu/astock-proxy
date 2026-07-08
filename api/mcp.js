@@ -1,7 +1,33 @@
 const ASTOCK_BASE_URL = process.env.ASTOCK_BASE_URL || 'https://astock-proxy.vercel.app';
 const SERVER_NAME = 'astock-mcp';
-const SERVER_VERSION = '1.0.0';
+const SERVER_VERSION = '1.1.0';
 const PRIVATE_MCP_PATH = '/mcp-laoda-20260708-x7k29q';
+
+function dateInputSchema() {
+  return {
+    type: 'object',
+    properties: {
+      date: {
+        type: 'string',
+        description: '日期，格式 YYYYMMDD，例如 20260708。不填默认今日。',
+      },
+    },
+    required: [],
+    additionalProperties: false,
+  };
+}
+
+function genericObjectOutputSchema(extraProperties = {}) {
+  return {
+    type: 'object',
+    properties: {
+      success: { type: 'boolean' },
+      updateTime: { type: 'string' },
+      ...extraProperties,
+    },
+    additionalProperties: true,
+  };
+}
 
 const tools = [
   {
@@ -23,44 +49,56 @@ const tools = [
       required: ['symbols'],
       additionalProperties: false,
     },
-    outputSchema: {
-      type: 'object',
-      properties: {
-        success: { type: 'boolean' },
-        count: { type: 'integer' },
-        data: { type: 'array', items: { type: 'object', additionalProperties: true } },
-        updateTime: { type: 'string' },
-      },
-      additionalProperties: true,
-    },
+    outputSchema: genericObjectOutputSchema({
+      count: { type: 'integer' },
+      data: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    }),
     annotations: { readOnlyHint: true },
   },
   {
     name: 'get_limit_up_pool',
-    title: '获取今日涨停池和连板梯队',
-    description: '查询A股涨停池、连板数据、最高板、二板、三板、首板、题材归因。适用于用户询问今天涨停梯队、连板数据、有哪些二板、最高板是谁。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        date: {
-          type: 'string',
-          description: '日期，格式 YYYYMMDD，例如 20260708。不填默认今日。',
-        },
-      },
-      required: [],
-      additionalProperties: false,
-    },
-    outputSchema: {
-      type: 'object',
-      properties: {
-        success: { type: 'boolean' },
-        xuangubao: { type: 'object', additionalProperties: true },
-        push2ex: { type: 'object', additionalProperties: true },
-        eastmoney: { type: 'object', additionalProperties: true },
-        updateTime: { type: 'string' },
-      },
-      additionalProperties: true,
-    },
+    title: '获取今日涨停池',
+    description: '查询A股涨停池、连板数据、最高板、二板、三板、首板、题材归因。适用于用户询问今天涨停池、涨停梯队、有哪些二板、最高板是谁。',
+    inputSchema: dateInputSchema(),
+    outputSchema: genericObjectOutputSchema({
+      xuangubao: { type: 'object', additionalProperties: true },
+      push2ex: { type: 'object', additionalProperties: true },
+      eastmoney: { type: 'object', additionalProperties: true },
+    }),
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'get_broken_limit_pool',
+    title: '获取今日炸板池',
+    description: '查询A股炸板池、炸板个股、炸板数量、炸板题材和炸板时间。适用于用户询问今天炸板池有哪些、哪个方向炸板多、封板质量差不差、亏钱效应是否扩散。',
+    inputSchema: dateInputSchema(),
+    outputSchema: genericObjectOutputSchema({
+      xuangubao: { type: 'object', additionalProperties: true },
+      push2ex: { type: 'object', additionalProperties: true },
+    }),
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'get_limit_down_pool',
+    title: '获取今日跌停池',
+    description: '查询A股跌停池、跌停个股、连续跌停、跌停时间和风险方向。适用于用户询问今天跌停池有哪些、亏钱效应在哪里、高标是否出现负反馈。',
+    inputSchema: dateInputSchema(),
+    outputSchema: genericObjectOutputSchema({
+      xuangubao: { type: 'object', additionalProperties: true },
+      push2ex: { type: 'object', additionalProperties: true },
+    }),
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'get_lianban_ladder',
+    title: '获取标准化连板梯队',
+    description: '返回标准化连板梯队，按最高板、三板、二板、首板、连板分布整理。适用于用户要求按最高板/三板/二板/首板输出，或要求直接查看连板梯队。',
+    inputSchema: dateInputSchema(),
+    outputSchema: genericObjectOutputSchema({
+      sourcePriority: { type: 'array', items: { type: 'string' } },
+      ladder: { type: 'object', additionalProperties: true },
+      raw: { type: 'object', additionalProperties: true },
+    }),
     annotations: { readOnlyHint: true },
   },
   {
@@ -73,16 +111,10 @@ const tools = [
       required: [],
       additionalProperties: false,
     },
-    outputSchema: {
-      type: 'object',
-      properties: {
-        success: { type: 'boolean' },
-        count: { type: 'integer' },
-        data: { type: 'array', items: { type: 'object', additionalProperties: true } },
-        updateTime: { type: 'string' },
-      },
-      additionalProperties: true,
-    },
+    outputSchema: genericObjectOutputSchema({
+      count: { type: 'integer' },
+      data: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    }),
     annotations: { readOnlyHint: true },
   },
   {
@@ -95,16 +127,10 @@ const tools = [
       required: [],
       additionalProperties: false,
     },
-    outputSchema: {
-      type: 'object',
-      properties: {
-        success: { type: 'boolean' },
-        sentiment: { type: 'object', additionalProperties: true },
-        boardDistribution: { type: 'object', additionalProperties: true },
-        updateTime: { type: 'string' },
-      },
-      additionalProperties: true,
-    },
+    outputSchema: genericObjectOutputSchema({
+      sentiment: { type: 'object', additionalProperties: true },
+      boardDistribution: { type: 'object', additionalProperties: true },
+    }),
     annotations: { readOnlyHint: true },
   },
 ];
@@ -205,6 +231,18 @@ async function callTool(name, args = {}) {
     return fetchJson('/api/limit-up', { date: args.date });
   }
 
+  if (name === 'get_broken_limit_pool') {
+    return fetchJson('/api/broken-limit', { date: args.date });
+  }
+
+  if (name === 'get_limit_down_pool') {
+    return fetchJson('/api/limit-down', { date: args.date });
+  }
+
+  if (name === 'get_lianban_ladder') {
+    return fetchJson('/api/lianban-ladder', { date: args.date });
+  }
+
   if (name === 'get_hot_sectors') {
     return fetchJson('/api/sector');
   }
@@ -221,7 +259,6 @@ async function handleRpc(message) {
 
   if (!method) return rpcError(id, -32600, 'Invalid Request');
 
-  // Notifications do not require a JSON-RPC response.
   if (id === undefined && method.startsWith('notifications/')) return null;
 
   if (method === 'initialize') {
