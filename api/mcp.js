@@ -1,6 +1,6 @@
 const ASTOCK_BASE_URL = process.env.ASTOCK_BASE_URL || 'https://astock-proxy.vercel.app';
 const SERVER_NAME = 'astock-mcp';
-const SERVER_VERSION = '1.4.0';
+const SERVER_VERSION = '1.5.0';
 const PRIVATE_MCP_PATH = '/mcp-laoda-20260708-x7k29q';
 
 function emptyInputSchema() {
@@ -14,6 +14,18 @@ function dateInputSchema() {
       date: { type: 'string', description: '日期，格式 YYYYMMDD，例如 20260708。不填默认今日。' },
     },
     required: [],
+    additionalProperties: false,
+  };
+}
+
+function symbolsInputSchema(extra = {}, required = ['symbols']) {
+  return {
+    type: 'object',
+    properties: {
+      symbols: { type: 'string', description: '股票代码，多个用英文逗号分隔，例如 600519,300750 或 sh600519,sz300750。' },
+      ...extra,
+    },
+    required,
     additionalProperties: false,
   };
 }
@@ -66,15 +78,7 @@ const tools = [
     name: 'get_stock_quote',
     title: '获取A股个股实时行情',
     description: '查询A股个股实时行情。适用于用户询问某只股票当前价格、涨跌幅、成交额、开高低、贵州茅台/长电科技等个股行情。支持 sh600519、sz000001，多个代码用英文逗号分隔。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        symbols: { type: 'string', description: '股票代码，多个代码用英文逗号分隔，例如 sh600519,sz000001。' },
-        detail: { type: 'boolean', description: '是否返回补充详情，默认 false。' },
-      },
-      required: ['symbols'],
-      additionalProperties: false,
-    },
+    inputSchema: symbolsInputSchema({ detail: { type: 'boolean', description: '是否返回补充详情，默认 false。' } }),
     outputSchema: genericObjectOutputSchema({ count: { type: 'integer' }, data: { type: 'array', items: { type: 'object', additionalProperties: true } } }),
     annotations: { readOnlyHint: true },
   },
@@ -153,7 +157,7 @@ const tools = [
   {
     name: 'get_intraday_node_snapshot',
     title: '获取盘中节点快照',
-    description: '获取当前时刻所属盘中节点、下一节点、指数/情绪/连板/板块快照。适用于9:35、10:35、11:35、13:35、14:35节点跟踪。当前版本是无存储即时快照。',
+    description: '获取当前时刻所属10分钟盘中节点、下一节点、指数/情绪/连板/板块快照。当前版本是无存储即时快照；真实时间线看 get_intraday_timeline。',
     inputSchema: emptyInputSchema(),
     outputSchema: genericObjectOutputSchema({ mode: { type: 'string' }, chinaTime: { type: 'string' }, currentNode: { type: 'string' }, nextNode: { type: 'string' }, snapshot: { type: 'object', additionalProperties: true }, brief: { type: 'object', additionalProperties: true } }),
     annotations: { readOnlyHint: true },
@@ -161,7 +165,7 @@ const tools = [
   {
     name: 'get_intraday_timeline',
     title: '获取已保存的盘中节点变化时间线',
-    description: '读取数据库中已保存的9:35、10:35、11:35、13:35、14:35、15:00节点快照，并输出节点变化、涨停变化、炸板变化、成交额变化、连板高度变化。适用于用户询问今天盘面是怎么一步步变化的。',
+    description: '读取数据库中已保存的10分钟级盘中节点快照，并输出节点变化、涨停变化、炸板变化、成交额变化、连板高度变化。适用于用户询问今天盘面是怎么一步步变化的。',
     inputSchema: dateInputSchema(),
     outputSchema: genericObjectOutputSchema({ date: { type: 'string' }, count: { type: 'integer' }, nodes: { type: 'array', items: { type: 'string' } }, changes: { type: 'array', items: { type: 'object', additionalProperties: true } }, conclusion: { type: 'string' } }),
     annotations: { readOnlyHint: true },
@@ -180,6 +184,54 @@ const tools = [
     description: '获取东方财富龙虎榜列表，包括上榜原因、净买额、买入额、卖出额。适用于盘后复盘游资/机构参与方向。席位级明细后续再加。',
     inputSchema: dateInputSchema(),
     outputSchema: genericObjectOutputSchema({ count: { type: 'integer' }, data: { type: 'array', items: { type: 'object', additionalProperties: true } }, summary: { type: 'object', additionalProperties: true } }),
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'get_stock_concepts',
+    title: '获取个股概念和板块归属',
+    description: '轻量查询个股所属行业/概念/地域板块和概念标签，用于题材归因、板块联动验证、盘前固定观察池归类。来自 a-stock-data-ai 思路的轻量化东财 slist 封装。默认缓存5分钟。',
+    inputSchema: symbolsInputSchema({}, ['symbols']),
+    outputSchema: genericObjectOutputSchema({ mode: { type: 'string' }, source: { type: 'string' }, count: { type: 'integer' }, data: { type: 'array', items: { type: 'object', additionalProperties: true } }, diagnostics: { type: 'object', additionalProperties: true } }),
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'get_stock_popularity',
+    title: '获取市场人气榜和个股热榜概念',
+    description: '轻量查询同花顺热榜、东方财富人气榜，以及指定个股的人气关联概念。用于观察散户关注度、踏空资金和热度扩散，不作为买入依据。默认缓存60秒。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        top: { type: 'integer', description: '返回前N名，默认50，最多100。' },
+        period: { type: 'string', description: '同花顺热榜周期：hour 或 day，默认 hour。' },
+        source: { type: 'string', description: '数据源：both、ths、eastmoney。默认 both。' },
+        symbols: { type: 'string', description: '可选，指定个股代码，多个用英文逗号分隔，用于查询个股热榜概念。' },
+      },
+      required: [],
+      additionalProperties: false,
+    },
+    outputSchema: genericObjectOutputSchema({ mode: { type: 'string' }, source: { type: 'string' }, count: { type: 'object', additionalProperties: true }, data: { type: 'object', additionalProperties: true }, diagnostics: { type: 'object', additionalProperties: true } }),
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'get_stock_capital_flow',
+    title: '获取个股资金流摘要',
+    description: '轻量查询东方财富个股资金流，支持分钟资金流、日级资金流或两者。用于验证核心票承接、主力净流入/流出和容量资金态度，不单独构成买点。默认分钟缓存60秒、日线缓存5分钟。',
+    inputSchema: symbolsInputSchema({
+      range: { type: 'string', description: 'minute、daily、both，默认 both。' },
+      dailyLimit: { type: 'integer', description: '日级资金流返回天数，默认20，最多120。' },
+    }),
+    outputSchema: genericObjectOutputSchema({ mode: { type: 'string' }, source: { type: 'string' }, range: { type: 'string' }, count: { type: 'integer' }, data: { type: 'array', items: { type: 'object', additionalProperties: true } }, diagnostics: { type: 'object', additionalProperties: true } }),
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'get_stock_news',
+    title: '获取个股新闻和公告催化',
+    description: '轻量查询指定个股的东方财富新闻和巨潮公告，并提取催化线索。用于解释异动、盘后验证和次日预案；不作为硬盘口主源。默认缓存5分钟。',
+    inputSchema: symbolsInputSchema({
+      include: { type: 'string', description: 'all、news、announcements，默认 all。' },
+      pageSize: { type: 'integer', description: '每只股票新闻/公告数量，默认20，最多50。' },
+    }),
+    outputSchema: genericObjectOutputSchema({ mode: { type: 'string' }, source: { type: 'string' }, include: { type: 'string' }, count: { type: 'integer' }, data: { type: 'array', items: { type: 'object', additionalProperties: true } }, diagnostics: { type: 'object', additionalProperties: true } }),
     annotations: { readOnlyHint: true },
   },
 ];
@@ -260,6 +312,10 @@ async function callTool(name, args = {}) {
   if (name === 'get_intraday_timeline') return fetchJson('/api/intraday-timeline', { date: args.date, token: process.env.CAPTURE_SECRET });
   if (name === 'get_news_catalysts') return fetchJson('/api/news-catalysts');
   if (name === 'get_dragon_tiger_list') return fetchJson('/api/dragon-tiger', { date: args.date });
+  if (name === 'get_stock_concepts') return fetchJson('/api/stock-concepts', { symbols: args.symbols });
+  if (name === 'get_stock_popularity') return fetchJson('/api/stock-popularity', { top: args.top, period: args.period, source: args.source, symbols: args.symbols });
+  if (name === 'get_stock_capital_flow') return fetchJson('/api/stock-capital-flow', { symbols: args.symbols, range: args.range, dailyLimit: args.dailyLimit });
+  if (name === 'get_stock_news') return fetchJson('/api/stock-news', { symbols: args.symbols, include: args.include, pageSize: args.pageSize });
   throw new Error(`Unknown tool: ${name}`);
 }
 
