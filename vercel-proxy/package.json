@@ -1,0 +1,7 @@
+{
+  "name": "astock-proxy",
+  "version": "1.0.0",
+  "dependencies": {
+    "iconv-lite": "^0.6.3"
+  }
+}
