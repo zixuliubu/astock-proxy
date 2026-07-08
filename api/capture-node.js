@@ -4,7 +4,7 @@ const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
 const CAPTURE_SECRET = process.env.CAPTURE_SECRET;
 const NODE_TTL_SECONDS = Number(process.env.NODE_TTL_SECONDS || 60 * 60 * 24 * 30);
 
-const DEFAULT_NODES = ['09:35', '10:35', '11:35', '13:35', '14:35', '15:00'];
+const DEFAULT_NODES = ['09:35', '09:45', '09:55', '10:05', '10:15', '10:25', '10:35', '10:45', '10:55', '11:05', '11:15', '11:25', '13:05', '13:15', '13:25', '13:35', '13:45', '13:55', '14:05', '14:15', '14:25', '14:35', '14:45', '14:55', '15:00'];
 
 function json(res, status, body) {
   res.statusCode = status;
@@ -38,6 +38,14 @@ function nearestNode(hhmmss) {
     if (hhmm >= n) current = n;
   }
   return current;
+}
+
+function nodeSortValue(node) {
+  const idx = DEFAULT_NODES.indexOf(node);
+  if (idx >= 0) return idx;
+  const [h, m] = String(node || '').split(':').map(Number);
+  if (Number.isFinite(h) && Number.isFinite(m)) return h * 60 + m;
+  return 9999;
 }
 
 function checkAuth(req) {
@@ -174,7 +182,7 @@ module.exports = async (req, res) => {
       try { timeline = JSON.parse(existingRaw); } catch (err) { timeline = []; }
     }
     const withoutSameNode = timeline.filter(item => item.node !== node);
-    const nextTimeline = [...withoutSameNode, snapshot].sort((a, b) => DEFAULT_NODES.indexOf(a.node) - DEFAULT_NODES.indexOf(b.node));
+    const nextTimeline = [...withoutSameNode, snapshot].sort((a, b) => nodeSortValue(a.node) - nodeSortValue(b.node));
     await redisCommand(['SET', key, JSON.stringify(nextTimeline)]);
     await redisCommand(['EXPIRE', key, String(NODE_TTL_SECONDS)]);
 
