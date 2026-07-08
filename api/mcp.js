@@ -1,6 +1,6 @@
 const ASTOCK_BASE_URL = process.env.ASTOCK_BASE_URL || 'https://astock-proxy.vercel.app';
 const SERVER_NAME = 'astock-mcp';
-const SERVER_VERSION = '1.2.0';
+const SERVER_VERSION = '1.3.0';
 const PRIVATE_MCP_PATH = '/mcp-laoda-20260708-x7k29q';
 
 function emptyInputSchema() {
@@ -118,9 +118,17 @@ const tools = [
   {
     name: 'get_intraday_node_snapshot',
     title: '获取盘中节点快照',
-    description: '获取当前时刻所属盘中节点、下一节点、指数/情绪/连板/板块快照。适用于9:35、10:35、11:35、13:35、14:35节点跟踪。当前版本是无存储快照，节点变化对比需要后续定时采集。',
+    description: '获取当前时刻所属盘中节点、下一节点、指数/情绪/连板/板块快照。适用于9:35、10:35、11:35、13:35、14:35节点跟踪。当前版本是无存储即时快照。',
     inputSchema: emptyInputSchema(),
     outputSchema: genericObjectOutputSchema({ mode: { type: 'string' }, chinaTime: { type: 'string' }, currentNode: { type: 'string' }, nextNode: { type: 'string' }, snapshot: { type: 'object', additionalProperties: true }, brief: { type: 'object', additionalProperties: true } }),
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'get_intraday_timeline',
+    title: '获取已保存的盘中节点变化时间线',
+    description: '读取数据库中已保存的9:35、10:35、11:35、13:35、14:35、15:00节点快照，并输出节点变化、涨停变化、炸板变化、成交额变化、连板高度变化。适用于用户询问今天盘面是怎么一步步变化的。',
+    inputSchema: dateInputSchema(),
+    outputSchema: genericObjectOutputSchema({ date: { type: 'string' }, count: { type: 'integer' }, nodes: { type: 'array', items: { type: 'string' } }, changes: { type: 'array', items: { type: 'object', additionalProperties: true } }, conclusion: { type: 'string' } }),
     annotations: { readOnlyHint: true },
   },
   {
@@ -171,6 +179,16 @@ function requestPath(req) {
   catch (err) { return PRIVATE_MCP_PATH; }
 }
 
+function safeUrlString(url) {
+  try {
+    const safe = new URL(url.toString());
+    if (safe.searchParams.has('token')) safe.searchParams.set('token', '[redacted]');
+    return safe.toString();
+  } catch (err) {
+    return '[unavailable]';
+  }
+}
+
 async function fetchJson(path, query = {}) {
   const url = new URL(path, ASTOCK_BASE_URL);
   Object.entries(query).forEach(([key, value]) => {
@@ -183,10 +201,10 @@ async function fetchJson(path, query = {}) {
     const text = await response.text();
     let data;
     try { data = JSON.parse(text); } catch (err) { data = { raw: text }; }
-    if (!response.ok) return { success: false, status: response.status, error: `Upstream returned HTTP ${response.status}`, data, url: url.toString() };
+    if (!response.ok) return { success: false, status: response.status, error: `Upstream returned HTTP ${response.status}`, data, url: safeUrlString(url) };
     return data;
   } catch (err) {
-    return { success: false, error: err && err.name === 'AbortError' ? 'Upstream request timeout' : String(err && err.message ? err.message : err), url: url.toString() };
+    return { success: false, error: err && err.name === 'AbortError' ? 'Upstream request timeout' : String(err && err.message ? err.message : err), url: safeUrlString(url) };
   } finally {
     clearTimeout(timeout);
   }
@@ -203,6 +221,7 @@ async function callTool(name, args = {}) {
   if (name === 'get_hot_sectors') return fetchJson('/api/sector');
   if (name === 'get_market_sentiment') return fetchJson('/api/sentiment');
   if (name === 'get_intraday_node_snapshot') return fetchJson('/api/intraday-nodes');
+  if (name === 'get_intraday_timeline') return fetchJson('/api/intraday-timeline', { date: args.date, token: process.env.CAPTURE_SECRET });
   if (name === 'get_news_catalysts') return fetchJson('/api/news-catalysts');
   if (name === 'get_dragon_tiger_list') return fetchJson('/api/dragon-tiger', { date: args.date });
   throw new Error(`Unknown tool: ${name}`);
