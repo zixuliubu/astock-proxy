@@ -157,6 +157,26 @@ function compactPopularity(resp) {
   };
 }
 
+function compactAutoLabel(resp) {
+  return {
+    success: resp?.success === true,
+    mode: resp?.mode,
+    count: resp?.count || 0,
+    selectedSymbols: resp?.selectedSymbols || [],
+    data: take(resp?.data, 8).map(x => ({
+      code: x.code,
+      name: x.name,
+      labels: x.labels || [],
+      reasons: take(x.reasons, 4),
+      triggers: take(x.triggers, 4),
+      invalids: take(x.invalids, 4),
+      metrics: x.metrics || {},
+    })),
+    diagnostics: resp?.diagnostics || {},
+    note: resp?.note,
+  };
+}
+
 function buildDiagnostics(parts) {
   return Object.fromEntries(Object.entries(parts).map(([key, value]) => [key, value?.success === false ? { ok: false, error: value.error, status: value.status } : { ok: true }]));
 }
@@ -164,7 +184,8 @@ function buildDiagnostics(parts) {
 function appendReviewHints(bundle) {
   const hints = Array.isArray(bundle.reviewHints) ? [...bundle.reviewHints] : [];
   const selected = bundle.extraSignals?.selectedSymbols || [];
-  if (selected.length) hints.push(`增强信号：已对核心票 ${selected.join(',')} 补充概念、资金流、新闻公告和人气验证。`);
+  if (selected.length) hints.push(`增强信号：已对核心票 ${selected.join(',')} 补充概念、资金流、新闻公告、人气验证和观察池自动标签。`);
+  if (bundle.extraSignals?.watchlistAutoLabel?.data?.length) hints.push('观察池标签：区分盘前固定、确认用、可参与观察、风险锚和降级删除，避免盘中马后炮加票。');
   if (bundle.extraSignals?.stockPopularity?.data?.ths?.length) hints.push('人气榜：用于验证散户关注度、踏空资金和热度扩散，不作为买入依据。');
   return hints;
 }
@@ -184,11 +205,12 @@ async function buildPlus(req) {
   const flowSymbols = selected.slice(0, 6).join(',');
   const newsSymbols = selected.slice(0, 5).join(',');
 
-  const [stockConcepts, stockCapitalFlow, stockNews, stockPopularity] = await Promise.all([
+  const [stockConcepts, stockCapitalFlow, stockNews, stockPopularity, watchlistAutoLabel] = await Promise.all([
     conceptSymbols ? fetchJson('/api/stock-concepts', { symbols: conceptSymbols }, 10000) : Promise.resolve({ success: true, data: [] }),
     flowSymbols ? fetchJson('/api/stock-capital-flow', { symbols: flowSymbols, range: 'minute' }, 11000) : Promise.resolve({ success: true, data: [] }),
     newsSymbols ? fetchJson('/api/stock-news', { symbols: newsSymbols, include: 'all', pageSize: 5 }, 12000) : Promise.resolve({ success: true, data: [] }),
     fetchJson('/api/stock-popularity', { top: 30, source: 'both', symbols: selected.slice(0, 5).join(',') }, 10000),
+    selected.length ? fetchJson('/api/watchlist-auto-label', { symbols: selected.slice(0, 8).join(','), context: 'pre', light: 'true' }, 10000) : Promise.resolve({ success: true, data: [] }),
   ]);
 
   const plus = {
@@ -202,6 +224,7 @@ async function buildPlus(req) {
         newsMaxSymbols: 5,
         newsPageSize: 5,
         popularityTop: 30,
+        autoLabelMaxSymbols: 8,
         redisWrites: 0,
       },
       selectedSymbols: selected,
@@ -209,7 +232,8 @@ async function buildPlus(req) {
       stockCapitalFlow: compactFlow(stockCapitalFlow),
       stockNews: compactNews(stockNews),
       stockPopularity: compactPopularity(stockPopularity),
-      diagnostics: buildDiagnostics({ stockConcepts, stockCapitalFlow, stockNews, stockPopularity }),
+      watchlistAutoLabel: compactAutoLabel(watchlistAutoLabel),
+      diagnostics: buildDiagnostics({ stockConcepts, stockCapitalFlow, stockNews, stockPopularity, watchlistAutoLabel }),
     },
   };
   plus.reviewHints = appendReviewHints(plus);
