@@ -22,6 +22,10 @@ const handlers = {
   'stock-news': () => require('./stock-news'),
   'stock-kline': () => require('./stock-kline'),
   'review-rules': () => require('./review-rules'),
+  'concept-members': () => require('./concept-members'),
+  'sector-money-flow': () => require('./sector-money-flow'),
+  'limit-reason': () => require('./limit-reason'),
+  'watchlist-auto-label': () => require('./watchlist-auto-label'),
   openapi: () => require('./openapi'),
 };
 
