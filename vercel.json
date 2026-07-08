@@ -7,6 +7,6 @@
     { "src": "/api/mcp.js", "status": 404 },
     { "src": "/mcp-laoda-20260708-x7k29q", "dest": "/api/mcp.js" },
     { "src": "/openapi.json", "dest": "/api/openapi.js" },
-    { "src": "/api/(quote|limit-up|broken-limit|limit-down|lianban-ladder|sector|sentiment|openapi)", "dest": "/api/$1.js" }
+    { "src": "/api/(.*)", "dest": "/api/$1.js" }
   ]
 }
