@@ -1,6 +1,7 @@
 const ASTOCK_BASE_URL = process.env.ASTOCK_BASE_URL || 'https://astock-proxy.vercel.app';
 const SERVER_NAME = 'astock-mcp';
 const SERVER_VERSION = '1.0.0';
+const PRIVATE_MCP_PATH = '/mcp-laoda-20260708-x7k29q';
 
 const tools = [
   {
@@ -139,6 +140,14 @@ function rpcError(id, code, message, data) {
   return { jsonrpc: '2.0', id: id ?? null, error: { code, message, ...(data ? { data } : {}) } };
 }
 
+function requestPath(req) {
+  try {
+    return new URL(req.url || PRIVATE_MCP_PATH, 'https://astock-proxy.vercel.app').pathname;
+  } catch (err) {
+    return PRIVATE_MCP_PATH;
+  }
+}
+
 async function fetchJson(path, query = {}) {
   const url = new URL(path, ASTOCK_BASE_URL);
   Object.entries(query).forEach(([key, value]) => {
@@ -153,7 +162,7 @@ async function fetchJson(path, query = {}) {
   try {
     const response = await fetch(url.toString(), {
       method: 'GET',
-      headers: { 'Accept': 'application/json' },
+      headers: { Accept: 'application/json' },
       signal: controller.signal,
     });
     const text = await response.text();
@@ -266,20 +275,25 @@ module.exports = async (req, res) => {
 
   if (req.method === 'OPTIONS') return res.status(204).end();
 
+  const pathname = requestPath(req);
+  if (pathname !== PRIVATE_MCP_PATH && pathname !== '/api/mcp.js') {
+    return json(res, 404, { error: 'Not Found' });
+  }
+
   if (req.method === 'GET') {
     const accepts = req.headers.accept || '';
     if (accepts.includes('text/event-stream')) {
       res.statusCode = 200;
       res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
       res.setHeader('Connection', 'keep-alive');
-      res.write(`event: endpoint\ndata: /mcp\n\n`);
+      res.write(`event: endpoint\ndata: ${PRIVATE_MCP_PATH}\n\n`);
       return res.end();
     }
 
     return json(res, 200, {
       name: SERVER_NAME,
       version: SERVER_VERSION,
-      endpoint: '/mcp',
+      endpoint: PRIVATE_MCP_PATH,
       transport: 'streamable-http-json-rpc',
       tools: tools.map((tool) => ({ name: tool.name, title: tool.title, description: tool.description })),
     });
