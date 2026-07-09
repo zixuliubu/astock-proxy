@@ -1,6 +1,6 @@
 const ASTOCK_BASE_URL = process.env.ASTOCK_BASE_URL || 'https://astock-proxy.vercel.app';
 const SERVER_NAME = 'astock-mcp';
-const SERVER_VERSION = '1.7.1';
+const SERVER_VERSION = '1.7.2';
 const PRIVATE_MCP_PATH = '/mcp-laoda-20260708-x7k29q';
 
 function schema(props = {}, required = []) { return { type: 'object', properties: props, required, additionalProperties: false }; }
@@ -14,6 +14,8 @@ const tools = [
   tool('get_health_check', '获取服务健康检查', '检查 astock-proxy 服务版本、MCP 路径、已挂载接口、环境变量是否存在，以及容量策略。不会返回任何 secret 值。', schema({ full: { type: 'boolean', description: '是否返回完整检查；当前保留字段。' } })),
   tool('get_daily_review_bundle', '获取一键短线复盘聚合包', '一键聚合今日短线复盘所需数据。当前默认返回增强包：基础盘口数据 + 核心票概念、资金流、新闻公告、人气榜、观察池自动标签。适用于“复盘今天”“开搞”“今天盘面怎么变化”。', schema({ date: { type: 'string', description: '日期 YYYYMMDD。' }, group: { type: 'string', description: '观察池组：default、semiconductor、robot、ai_compute、innovation_drug、fluorochemical、paper、market_core。' }, symbols: { type: 'string', description: '自定义核心观察票，多个逗号分隔。' }, raw: { type: 'boolean', description: '是否返回原始完整数据。' }, extra: { type: 'boolean', description: '是否返回增强信号；默认 true。' } })),
   tool('get_stock_quote', '获取A股个股实时行情', '查询A股个股实时行情，支持多个代码。', symbolsInputSchema({ detail: { type: 'boolean', description: '是否返回补充详情。' } })),
+  tool('get_orderbook_lite', '获取轻量五档盘口', '按 symbols 查询少数核心票的轻量五档盘口、买卖盘压强、上一帧变化和盘口强度。最多8只；用于盘中打板票、趋势票、观察池核心票确认；不是 Level-2 逐笔盘口。', symbolsInputSchema({ ttlMs: { type: 'integer', description: '缓存毫秒，默认5000，范围1000-10000。' }, compare: { type: 'boolean', description: '是否返回上一帧变化，默认false。盘中10秒轮询建议true。' } })),
+  tool('get_watchlist_orderbook', '获取观察池盘口聚合', '按观察池 group 或自定义 symbols 聚合轻量盘口，输出 strongest、weakest、topAmount 和角色标签。用于盘前固定池、盘中新增、打板票、趋势票的盘口确认。', schema({ group: { type: 'string', description: '观察池组：default、semiconductor、robot、ai_compute、innovation_drug、fluorochemical、paper、market_core。默认 default。' }, symbols: { type: 'string', description: '自定义股票代码，多个逗号分隔；传入后优先于 group。' }, ttlMs: { type: 'integer', description: '缓存毫秒，默认5000，范围1000-10000。' }, compare: { type: 'boolean', description: '是否返回上一帧变化，默认true。' } })),
   tool('get_market_overview', '获取大盘指数和两市成交额', '查询指数表现、成交额近似值、涨跌家数和市场总览标签。', emptyInputSchema()),
   tool('get_limit_up_pool', '获取今日涨停池', '查询涨停池、连板数据、最高板、二板、三板、首板、题材归因。', dateInputSchema()),
   tool('get_broken_limit_pool', '获取今日炸板池', '查询炸板池、炸板数量、炸板题材和炸板时间。', dateInputSchema()),
@@ -68,6 +70,8 @@ async function callTool(name, args = {}) {
     get_health_check: ['/api/health-check', { full: args.full === true ? 'true' : undefined }],
     get_daily_review_bundle: ['/api/daily-review-bundle', { date: args.date, group: args.group, symbols: args.symbols, raw: args.raw === true ? 'true' : undefined, extra: args.extra === false ? 'false' : undefined }],
     get_stock_quote: ['/api/quote', { symbols: args.symbols, detail: args.detail === true ? 'true' : undefined }],
+    get_orderbook_lite: ['/api/orderbook-lite', { symbols: args.symbols, ttlMs: args.ttlMs, compare: args.compare === true ? 'true' : undefined }],
+    get_watchlist_orderbook: ['/api/watchlist-orderbook', { group: args.group, symbols: args.symbols, ttlMs: args.ttlMs, compare: args.compare === false ? 'false' : 'true' }],
     get_market_overview: ['/api/market-overview', {}],
     get_limit_up_pool: ['/api/limit-up', { date: args.date }],
     get_broken_limit_pool: ['/api/broken-limit', { date: args.date }],
