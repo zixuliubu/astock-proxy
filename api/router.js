@@ -27,6 +27,7 @@ const handlers = {
   'limit-reason': () => require('./limit-reason'),
   'watchlist-auto-label': () => require('./watchlist-auto-label'),
   'orderbook-lite': () => require('./orderbook-lite'),
+  'watchlist-orderbook': () => require('./watchlist-orderbook'),
   'health-check': () => require('./health-check'),
   openapi: () => require('./openapi'),
 };
