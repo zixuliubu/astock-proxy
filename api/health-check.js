@@ -1,10 +1,10 @@
 const { json, setCors, okBase } = require('./_stock-utils');
 
-const SERVER_VERSION = '1.7.3';
+const SERVER_VERSION = '1.7.4';
 const ENDPOINTS = [
   'quote', 'market-overview', 'sentiment', 'sector',
   'limit-up', 'broken-limit', 'limit-down', 'lianban-ladder',
-  'watchlist', 'dragon-tiger', 'dragon-tiger-detail', 'dragon-tiger-seat-radar', 'news-catalysts',
+  'watchlist', 'dragon-tiger', 'dragon-tiger-detail', 'dragon-tiger-seat-radar', 'dragon-tiger-debug', 'news-catalysts',
   'intraday-nodes', 'capture-node', 'intraday-timeline',
   'daily-review-bundle', 'daily-review-bundle-base', 'daily-review-plus',
   'stock-concepts', 'stock-popularity', 'stock-capital-flow', 'stock-news', 'stock-kline',
@@ -27,6 +27,7 @@ function publicChecks() {
       orderbookLite: 'no, in-memory short cache only',
       watchlistOrderbook: 'no, delegates to orderbook-lite and uses in-memory short cache only',
       dragonTigerSeat: 'no, on-demand only with short cache',
+      dragonTigerDebug: 'no, diagnostic read-only endpoint with short cache',
     },
     capacityPolicy: {
       defaultSampling: '10-minute intraday nodes via GitHub Actions',
@@ -35,6 +36,7 @@ function publicChecks() {
       orderbookLite: 'on-demand only; max 8 symbols; default 5s cache; not Level-2; not all-market scan',
       watchlistOrderbook: 'on-demand observation-pool aggregation; max 8 symbols; not included in daily-review-bundle by default',
       dragonTigerSeat: 'on-demand after-hours analysis; seat tags are rules-based and not official identity confirmation',
+      dragonTigerDebug: 'on-demand diagnostic endpoint; separates not_on_list, listed_detail_missing, detail_ok, fetch_error',
     },
     envPresence: {
       CAPTURE_SECRET: Boolean(process.env.CAPTURE_SECRET),
