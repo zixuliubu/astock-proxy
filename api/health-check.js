@@ -1,10 +1,10 @@
 const { json, setCors, okBase } = require('./_stock-utils');
 
-const SERVER_VERSION = '1.7.7';
+const SERVER_VERSION = '1.7.8';
 const ENDPOINTS = [
   'quote', 'market-overview', 'sentiment', 'sector',
   'limit-up', 'broken-limit', 'limit-down', 'lianban-ladder',
-  'watchlist', 'dragon-tiger', 'dragon-tiger-detail', 'dragon-tiger-seat-radar', 'dragon-tiger-debug', 'news-catalysts',
+  'watchlist', 'dragon-tiger', 'dragon-tiger-detail', 'dragon-tiger-seat-radar', 'dragon-tiger-debug', 'dragon-tiger-seat-code-probe', 'news-catalysts',
   'intraday-nodes', 'capture-node', 'intraday-timeline',
   'daily-review-bundle', 'daily-review-bundle-base', 'daily-review-plus',
   'stock-concepts', 'stock-popularity', 'stock-capital-flow', 'stock-news', 'stock-kline',
@@ -28,6 +28,7 @@ function publicChecks() {
       watchlistOrderbook: 'no, delegates to orderbook-lite and uses in-memory short cache only',
       dragonTigerSeat: 'no, on-demand only with short cache',
       dragonTigerDebug: 'no, diagnostic read-only endpoint with short cache',
+      dragonTigerSeatCodeProbe: 'no, diagnostic read-only endpoint with short cache',
     },
     capacityPolicy: {
       defaultSampling: '10-minute intraday nodes via GitHub Actions',
@@ -37,6 +38,7 @@ function publicChecks() {
       watchlistOrderbook: 'on-demand observation-pool aggregation; max 8 symbols; not included in daily-review-bundle by default',
       dragonTigerSeat: 'default lightweight list-status mode; single-symbol deep=true prioritizes TRADE_ID filters for seat-field discovery',
       dragonTigerDebug: 'default lightweight mode to avoid Vercel timeout; single-symbol deep=true prioritizes TRADE_ID filters and looks for real seat fields',
+      dragonTigerSeatCodeProbe: 'single-symbol diagnostic endpoint; extracts BUY_SEAT / SELL_SEAT codes and probes candidate department dictionary reports',
     },
     envPresence: {
       CAPTURE_SECRET: Boolean(process.env.CAPTURE_SECRET),
