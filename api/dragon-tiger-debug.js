@@ -44,10 +44,15 @@ function rowCode(row) {
   return cleanCode(pick(row, ['SECURITY_CODE', 'SECUCODE', 'CODE', 'STOCK_CODE'], ''));
 }
 
+function rowTradeId(row) {
+  const v = pick(row, ['TRADE_ID', 'TRADEID', 'BILLBOARD_TRADE_ID'], '');
+  return v === undefined || v === null ? '' : String(v).trim();
+}
+
 function compactRow(row) {
   const keys = Object.keys(row || {});
   const out = {};
-  for (const k of keys.slice(0, 50)) {
+  for (const k of keys.slice(0, 60)) {
     const v = row[k];
     if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') out[k] = v;
   }
@@ -62,6 +67,23 @@ function classifyKeys(keys = []) {
   if (seatKeys.length) kind = 'seat_detail';
   else if (summaryKeys.length) kind = 'summary_detail';
   return { kind, seatKeys, summaryKeys };
+}
+
+function buildFilters(tradeDate, code, tradeIds = []) {
+  const filters = [
+    `(TRADE_DATE='${tradeDate}')(SECURITY_CODE='${code}')`,
+    `(TRADE_DATE='${tradeDate}')`,
+    `(SECURITY_CODE='${code}')`,
+  ];
+  for (const id of tradeIds || []) {
+    filters.push(`(TRADE_ID='${id}')`);
+    filters.push(`(TRADE_ID=${id})`);
+    filters.push(`(TRADE_DATE='${tradeDate}')(TRADE_ID='${id}')`);
+    filters.push(`(TRADE_DATE='${tradeDate}')(TRADE_ID=${id})`);
+    filters.push(`(SECURITY_CODE='${code}')(TRADE_ID='${id}')`);
+    filters.push(`(SECURITY_CODE='${code}')(TRADE_ID=${id})`);
+  }
+  return [...new Set(filters)];
 }
 
 async function fetchReport({ reportName, filter, pageSize = 100 }) {
@@ -101,10 +123,14 @@ async function debugOne({ date, symbol }) {
 
   let listStatus = 'unknown';
   let listRow = null;
+  let listRows = [];
+  let tradeIds = [];
   try {
     const list = await fetchReport({ reportName: LIST_REPORT, filter: `(TRADE_DATE='${tradeDate}')`, pageSize: 200 });
     const matches = list.rows.filter(r => rowCode(r) === code);
-    listRow = matches[0] ? compactRow(matches[0]) : null;
+    listRows = matches.slice(0, 10).map(compactRow);
+    listRow = listRows[0] || null;
+    tradeIds = [...new Set(matches.map(rowTradeId).filter(Boolean))];
     listStatus = matches.length ? 'listed' : 'not_on_list';
     diagnostics.push({
       type: 'list',
@@ -112,9 +138,10 @@ async function debugOne({ date, symbol }) {
       filter: `(TRADE_DATE='${tradeDate}')`,
       rawCount: list.rawCount,
       matchCount: matches.length,
+      tradeIds,
       sampleKeys: list.sampleKeys,
       fieldClass: list.fieldClass,
-      matchRows: matches.slice(0, 3).map(compactRow),
+      matchRows: listRows,
     });
   } catch (err) {
     listStatus = 'list_fetch_error';
@@ -122,17 +149,13 @@ async function debugOne({ date, symbol }) {
   }
 
   const detailAttempts = [];
-  const filters = [
-    `(TRADE_DATE='${tradeDate}')(SECURITY_CODE='${code}')`,
-    `(TRADE_DATE='${tradeDate}')`,
-    `(SECURITY_CODE='${code}')`,
-  ];
+  const filters = buildFilters(tradeDate, code, tradeIds);
 
   for (const reportName of DETAIL_REPORTS) {
     for (const filter of filters) {
       try {
         const result = await fetchReport({ reportName, filter, pageSize: 200 });
-        const matches = result.rows.filter(r => rowCode(r) === code || JSON.stringify(r).includes(code));
+        const matches = result.rows.filter(r => rowCode(r) === code || JSON.stringify(r).includes(code) || tradeIds.some(id => JSON.stringify(r).includes(String(id))));
         const matchKeys = matches[0] ? Object.keys(matches[0]).slice(0, 80) : result.sampleKeys;
         const fieldClass = classifyKeys(matchKeys);
         detailAttempts.push({
@@ -169,6 +192,8 @@ async function debugOne({ date, symbol }) {
     status,
     listStatus,
     listRow,
+    listRows,
+    tradeIds,
     seatCandidate: seatHit ? { reportName: seatHit.reportName, filter: seatHit.filter, matchCount: seatHit.matchCount, sampleKeys: seatHit.sampleKeys, fieldClass: seatHit.matchFieldClass, matchRows: seatHit.matchRows } : null,
     summaryCandidate: summaryHit ? { reportName: summaryHit.reportName, filter: summaryHit.filter, matchCount: summaryHit.matchCount, sampleKeys: summaryHit.sampleKeys, fieldClass: summaryHit.matchFieldClass, matchRows: summaryHit.matchRows } : null,
     diagnostics,
@@ -178,8 +203,8 @@ async function debugOne({ date, symbol }) {
       : status === 'seat_candidate_found'
         ? '已找到包含席位/营业部字段的候选表，可据此修正正式明细接口。'
         : status === 'summary_candidate_only'
-          ? '仅找到个股龙虎榜汇总/分原因明细表，没有营业部席位字段，不能当作席位明细。'
-          : '股票已上榜或列表状态不明，但当前候选表未返回可用席位字段。',
+          ? '仅找到个股龙虎榜汇总/分原因明细表，没有营业部席位字段，不能当作席位明细。v3 已尝试 TRADE_ID 下钻。'
+          : '股票已上榜或列表状态不明，但当前候选表未返回可用席位字段。v3 已尝试 TRADE_ID 下钻。',
   };
 }
 
@@ -191,27 +216,27 @@ module.exports = async (req, res) => {
   if (!symbols.length) return json(res, 400, { success: false, error: 'Missing symbols, e.g. ?date=20260709&symbols=002185,600584' });
   const date = req.query.date;
   const ttlMs = Math.max(30000, Math.min(Number(req.query.ttlMs || 300000) || 300000, 900000));
-  const key = `dragon-tiger-debug:v2:${formatDate(date)}:${symbols.join(',')}`;
+  const key = `dragon-tiger-debug:v3:${formatDate(date)}:${symbols.join(',')}`;
 
   try {
     const { value, cached: cacheHit } = await cached(key, ttlMs, async () => {
       const results = [];
       for (const symbol of symbols) results.push(await debugOne({ date, symbol }));
       return okBase({
-        mode: 'dragon_tiger_debug_v2',
+        mode: 'dragon_tiger_debug_v3',
         date: formatDate(date),
         symbols,
         count: results.length,
         statusSummary: results.reduce((acc, x) => { acc[x.status || 'unknown'] = (acc[x.status || 'unknown'] || 0) + 1; return acc; }, {}),
         results,
-        note: '诊断接口用于区分未上榜、汇总表命中、真正席位表命中；只有包含席位/营业部字段的候选才会标为 seat_candidate_found。',
+        note: '诊断接口用于区分未上榜、汇总表命中、真正席位表命中；v3 已加入 TRADE_ID 下钻过滤，只有包含席位/营业部字段的候选才会标为 seat_candidate_found。',
       });
     });
     return json(res, 200, { ...value, cacheHit });
   } catch (err) {
     return json(res, 200, okBase({
       success: false,
-      mode: 'dragon_tiger_debug_v2',
+      mode: 'dragon_tiger_debug_v3',
       error: String(err && err.message ? err.message : err),
       symbols,
       results: [],
