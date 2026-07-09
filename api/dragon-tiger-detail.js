@@ -41,6 +41,11 @@ function rowCode(row) {
   return cleanCode(pick(row, ['SECURITY_CODE', 'SECUCODE', 'CODE', 'STOCK_CODE'], ''));
 }
 
+function rowTradeId(row) {
+  const v = pick(row, ['TRADE_ID', 'TRADEID', 'BILLBOARD_TRADE_ID'], '');
+  return v === undefined || v === null ? '' : String(v).trim();
+}
+
 function compactListRow(row) {
   if (!row) return null;
   return {
@@ -48,13 +53,17 @@ function compactListRow(row) {
     code: rowCode(row),
     name: pick(row, ['SECURITY_NAME_ABBR', 'SECURITY_NAME', 'STOCK_NAME'], ''),
     reason: pick(row, ['EXPLAIN', 'BILLBOARD_TYPE', 'REASON'], ''),
+    explanation: pick(row, ['EXPLANATION'], ''),
+    tradeId: rowTradeId(row),
     close: n(pick(row, ['CLOSE_PRICE'], 0)),
     changePct: n(pick(row, ['CHANGE_RATE'], 0)),
-    buyAmount: n(pick(row, ['BUY_AMT'], 0)),
-    sellAmount: n(pick(row, ['SELL_AMT'], 0)),
+    buyAmount: n(pick(row, ['BUY_AMT', 'BILLBOARD_BUY_AMT'], 0)),
+    sellAmount: n(pick(row, ['SELL_AMT', 'BILLBOARD_SELL_AMT'], 0)),
     netAmount: n(pick(row, ['BILLBOARD_NET_AMT'], 0)),
     turnover: n(pick(row, ['TURNOVERRATE'], 0)),
-    amount: n(pick(row, ['AMOUNT'], 0)),
+    amount: n(pick(row, ['AMOUNT', 'ACCUM_AMOUNT'], 0)),
+    buySeat: pick(row, ['BUY_SEAT', 'BUY_SEAT_NEW'], ''),
+    sellSeat: pick(row, ['SELL_SEAT', 'SELL_SEAT_NEW'], ''),
   };
 }
 
@@ -139,12 +148,32 @@ async function fetchListRow(tradeDate, code) {
     pageSize: 200,
   });
   const matches = result.rows.filter(r => rowCode(r) === code);
+  const listRows = matches.map(compactListRow).filter(Boolean);
   return {
     rawCount: result.rawCount,
     matchCount: matches.length,
-    listRow: matches[0] ? compactListRow(matches[0]) : null,
+    listRow: listRows[0] || null,
+    listRows,
+    tradeIds: [...new Set(listRows.map(x => x.tradeId).filter(Boolean))],
     sampleKeys: result.sampleKeys,
   };
+}
+
+function buildFilters(tradeDate, code, tradeIds = []) {
+  const filters = [
+    `(TRADE_DATE='${tradeDate}')(SECURITY_CODE='${code}')`,
+    `(TRADE_DATE='${tradeDate}')`,
+    `(SECURITY_CODE='${code}')`,
+  ];
+  for (const id of tradeIds || []) {
+    filters.push(`(TRADE_ID='${id}')`);
+    filters.push(`(TRADE_ID=${id})`);
+    filters.push(`(TRADE_DATE='${tradeDate}')(TRADE_ID='${id}')`);
+    filters.push(`(TRADE_DATE='${tradeDate}')(TRADE_ID=${id})`);
+    filters.push(`(SECURITY_CODE='${code}')(TRADE_ID='${id}')`);
+    filters.push(`(SECURITY_CODE='${code}')(TRADE_ID=${id})`);
+  }
+  return [...new Set(filters)];
 }
 
 async function fetchDragonTigerDetail({ date, symbol }) {
@@ -156,16 +185,18 @@ async function fetchDragonTigerDetail({ date, symbol }) {
 
   try {
     listCheck = await fetchListRow(tradeDate, code);
-    attempts.push({ type: 'list', reportName: LIST_REPORT, rawCount: listCheck.rawCount, matchCount: listCheck.matchCount });
+    attempts.push({ type: 'list', reportName: LIST_REPORT, rawCount: listCheck.rawCount, matchCount: listCheck.matchCount, tradeIds: listCheck.tradeIds });
     if (!listCheck.listRow) {
       return {
         success: false,
-        mode: 'dragon_tiger_detail_v2',
+        mode: 'dragon_tiger_detail_v3',
         status: 'not_on_list',
         source: 'eastmoney_datacenter',
         tradeDate,
         code,
         listRow: null,
+        listRows: [],
+        tradeIds: [],
         count: 0,
         seats: [],
         summary: summarizeSeats([]),
@@ -177,11 +208,7 @@ async function fetchDragonTigerDetail({ date, symbol }) {
     attempts.push({ type: 'list', reportName: LIST_REPORT, error: String(err && err.message ? err.message : err) });
   }
 
-  const filters = [
-    `(TRADE_DATE='${tradeDate}')(SECURITY_CODE='${code}')`,
-    `(TRADE_DATE='${tradeDate}')`,
-    `(SECURITY_CODE='${code}')`,
-  ];
+  const filters = buildFilters(tradeDate, code, listCheck ? listCheck.tradeIds : []);
 
   for (const reportName of DETAIL_REPORTS) {
     for (const filterOverride of filters) {
@@ -195,15 +222,15 @@ async function fetchDragonTigerDetail({ date, symbol }) {
           sortTypes: '-1,1,-1',
           pageSize: 200,
         });
-        const matched = result.rows.filter(r => rowCode(r) === code || JSON.stringify(r).includes(code));
+        const matched = result.rows.filter(r => rowCode(r) === code || JSON.stringify(r).includes(code) || (listCheck && listCheck.tradeIds || []).some(id => JSON.stringify(r).includes(String(id))));
         attempts.push({ reportName, filter: filterOverride, rawCount: result.rawCount, matchCount: matched.length, sampleKeys: result.sampleKeys });
-        const rowsForNormalize = matched.length ? matched : (filterOverride.includes('SECURITY_CODE') ? result.rows : []);
+        const rowsForNormalize = matched.length ? matched : (filterOverride.includes('SECURITY_CODE') || filterOverride.includes('TRADE_ID') ? result.rows : []);
         if (rowsForNormalize.length) {
           const seats = normalizeDetailRows(rowsForNormalize);
           if (seats.length) {
             return {
               success: true,
-              mode: 'dragon_tiger_detail_v2',
+              mode: 'dragon_tiger_detail_v3',
               status: 'detail_ok',
               source: 'eastmoney_datacenter',
               reportName,
@@ -211,6 +238,8 @@ async function fetchDragonTigerDetail({ date, symbol }) {
               tradeDate,
               code,
               listRow: listCheck ? listCheck.listRow : null,
+              listRows: listCheck ? listCheck.listRows : [],
+              tradeIds: listCheck ? listCheck.tradeIds : [],
               count: seats.length,
               seats,
               summary: summarizeSeats(seats),
@@ -227,19 +256,21 @@ async function fetchDragonTigerDetail({ date, symbol }) {
 
   return {
     success: false,
-    mode: 'dragon_tiger_detail_v2',
+    mode: 'dragon_tiger_detail_v3',
     status: listCheck && listCheck.listRow ? 'listed_detail_missing' : 'fetch_error',
     source: 'eastmoney_datacenter',
     tradeDate,
     code,
     listRow: listCheck ? listCheck.listRow : null,
+    listRows: listCheck ? listCheck.listRows : [],
+    tradeIds: listCheck ? listCheck.tradeIds : [],
     count: 0,
     seats: [],
     summary: summarizeSeats([]),
     attempts,
     error: 'No seat detail rows returned from fallback reports',
     explanation: listCheck && listCheck.listRow
-      ? '该股票已在龙虎榜列表中出现，但当前候选席位明细表没有返回可解析席位行；可调用 /api/dragon-tiger-debug 查看 reportName/字段诊断。'
+      ? '该股票已在龙虎榜列表中出现，但当前候选席位明细表没有返回可解析席位行；已尝试 SECURITY_CODE 与 TRADE_ID 下钻过滤，可调用 /api/dragon-tiger-debug 查看 reportName/字段诊断。'
       : '龙虎榜列表检查失败或上游异常，暂时无法确认是否上榜。',
   };
 }
@@ -253,7 +284,7 @@ module.exports = async (req, res) => {
   if (!symbols.length) return json(res, 400, { success: false, error: 'Missing symbol/symbols, e.g. ?date=20260709&symbol=002185' });
 
   const ttlMs = Math.max(30000, Math.min(Number(req.query.ttlMs || 300000) || 300000, 900000));
-  const key = `dragon-tiger-detail:v2:${formatDate(date)}:${symbols.join(',')}`;
+  const key = `dragon-tiger-detail:v3:${formatDate(date)}:${symbols.join(',')}`;
 
   try {
     const { value, cached: cacheHit } = await cached(key, ttlMs, async () => {
@@ -262,20 +293,20 @@ module.exports = async (req, res) => {
         details.push(await fetchDragonTigerDetail({ date, symbol }));
       }
       return okBase({
-        mode: 'dragon_tiger_detail_bundle_v2',
+        mode: 'dragon_tiger_detail_bundle_v3',
         count: details.length,
         symbols,
         date: formatDate(date),
         details,
         statusSummary: details.reduce((acc, x) => { acc[x.status || 'unknown'] = (acc[x.status || 'unknown'] || 0) + 1; return acc; }, {}),
-        note: '龙虎榜席位明细通常盘后更新；游资识别为规则疑似标签，不能当官方事实。',
+        note: '龙虎榜席位明细通常盘后更新；游资识别为规则疑似标签，不能当官方事实。v3 已加入 TRADE_ID 下钻过滤。',
       });
     });
     return json(res, 200, { ...value, cacheHit });
   } catch (err) {
     return json(res, 200, okBase({
       success: false,
-      mode: 'dragon_tiger_detail_bundle_v2',
+      mode: 'dragon_tiger_detail_bundle_v3',
       error: String(err && err.message ? err.message : err),
       symbols,
       details: [],
