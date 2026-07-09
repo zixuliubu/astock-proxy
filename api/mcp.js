@@ -1,6 +1,6 @@
 const ASTOCK_BASE_URL = process.env.ASTOCK_BASE_URL || 'https://astock-proxy.vercel.app';
 const SERVER_NAME = 'astock-mcp';
-const SERVER_VERSION = '1.7.3';
+const SERVER_VERSION = '1.7.4';
 const PRIVATE_MCP_PATH = '/mcp-laoda-20260708-x7k29q';
 
 function schema(props = {}, required = []) { return { type: 'object', properties: props, required, additionalProperties: false }; }
@@ -28,8 +28,9 @@ const tools = [
   tool('get_intraday_timeline', '获取已保存的盘中节点变化时间线', '读取已保存的10分钟级盘中节点快照，输出节点变化、涨停变化、炸板变化、成交额变化、连板高度变化。', dateInputSchema()),
   tool('get_news_catalysts', '获取消息面催化线索', '获取盘中/盘后财经快讯和题材催化线索；只做催化验证，不作为硬盘口主源。', emptyInputSchema()),
   tool('get_dragon_tiger_list', '获取龙虎榜列表', '获取东方财富龙虎榜列表，包括上榜原因、净买额、买入额、卖出额。', dateInputSchema()),
-  tool('get_dragon_tiger_detail', '获取龙虎榜席位明细', '按日期和股票代码查询龙虎榜买卖席位明细，返回席位买入额、卖出额、净买额、机构/陆股通/拉萨/疑似游资标签。席位标签为规则识别，不代表官方身份确认。', symbolsInputSchema({ date: { type: 'string', description: '日期 YYYYMMDD；不填默认今日。' }, ttlMs: { type: 'integer', description: '缓存毫秒，默认300000。' } })),
-  tool('get_dragon_tiger_seat_radar', '获取龙虎榜席位雷达', '按日期和可选股票池聚合龙虎榜席位质量，输出机构净买、疑似游资、拉萨系、一家独大、高风险榜等盘后验证信息。用于次日对手盘质量判断。', schema({ date: { type: 'string', description: '日期 YYYYMMDD；不填默认今日。' }, symbols: { type: 'string', description: '可选股票代码，多个逗号分隔；不填则扫描当日龙虎榜前若干只。' }, limit: { type: 'integer', description: '不传 symbols 时扫描数量，默认30，最多50。' }, ttlMs: { type: 'integer', description: '缓存毫秒，默认300000。' } })),
+  tool('get_dragon_tiger_detail', '获取龙虎榜席位明细', '按日期和股票代码查询龙虎榜买卖席位明细，返回席位买入额、卖出额、净买额、机构/陆股通/拉萨/疑似游资标签，并区分未上榜、明细缺失、明细成功。席位标签为规则识别，不代表官方身份确认。', symbolsInputSchema({ date: { type: 'string', description: '日期 YYYYMMDD；不填默认今日。' }, ttlMs: { type: 'integer', description: '缓存毫秒，默认300000。' } })),
+  tool('get_dragon_tiger_seat_radar', '获取龙虎榜席位雷达', '按日期和可选股票池聚合龙虎榜席位质量，输出机构净买、疑似游资、拉萨系、一家独大、高风险榜，并分开标记 not_on_list / listed_detail_missing / detail_ok。用于次日对手盘质量判断。', schema({ date: { type: 'string', description: '日期 YYYYMMDD；不填默认今日。' }, symbols: { type: 'string', description: '可选股票代码，多个逗号分隔；不填则扫描当日龙虎榜前若干只。' }, limit: { type: 'integer', description: '不传 symbols 时扫描数量，默认30，最多50。' }, ttlMs: { type: 'integer', description: '缓存毫秒，默认300000。' } })),
+  tool('get_dragon_tiger_debug', '诊断龙虎榜席位明细缺失原因', '诊断某只股票龙虎榜席位明细为什么缺失：是否未上榜、是否已上榜但明细表未返回、哪个东方财富 reportName/过滤条件有候选数据。用于修接口和判断数据状态，不用于直接交易决策。', symbolsInputSchema({ date: { type: 'string', description: '日期 YYYYMMDD；不填默认今日。' }, ttlMs: { type: 'integer', description: '缓存毫秒，默认300000。' } })),
   tool('get_stock_concepts', '获取个股概念和板块归属', '轻量查询个股所属行业/概念/地域板块和概念标签，用于题材归因、板块联动验证、盘前观察池归类。', symbolsInputSchema()),
   tool('get_stock_popularity', '获取市场人气榜和个股热榜概念', '查询同花顺热榜、东方财富人气榜，以及指定个股的人气关联概念。用于观察散户关注度、踏空资金和热度扩散。', schema({ top: { type: 'integer', description: '前N名，默认50，最多100。' }, period: { type: 'string', description: 'hour 或 day。' }, source: { type: 'string', description: 'both、ths、eastmoney。' }, symbols: { type: 'string', description: '可选个股代码。' } })),
   tool('get_stock_capital_flow', '获取个股资金流摘要', '查询东方财富个股资金流，支持分钟资金流、日级资金流或两者。用于验证核心票承接和容量资金态度。', symbolsInputSchema({ range: { type: 'string', description: 'minute、daily、both。' }, dailyLimit: { type: 'integer', description: '日级资金流返回天数，最多120。' } })),
@@ -88,6 +89,7 @@ async function callTool(name, args = {}) {
     get_dragon_tiger_list: ['/api/dragon-tiger', { date: args.date }],
     get_dragon_tiger_detail: ['/api/dragon-tiger-detail', { date: args.date, symbols: args.symbols, ttlMs: args.ttlMs }],
     get_dragon_tiger_seat_radar: ['/api/dragon-tiger-seat-radar', { date: args.date, symbols: args.symbols, limit: args.limit, ttlMs: args.ttlMs }],
+    get_dragon_tiger_debug: ['/api/dragon-tiger-debug', { date: args.date, symbols: args.symbols, ttlMs: args.ttlMs }],
     get_stock_concepts: ['/api/stock-concepts', { symbols: args.symbols }],
     get_stock_popularity: ['/api/stock-popularity', { top: args.top, period: args.period, source: args.source, symbols: args.symbols }],
     get_stock_capital_flow: ['/api/stock-capital-flow', { symbols: args.symbols, range: args.range, dailyLimit: args.dailyLimit }],
