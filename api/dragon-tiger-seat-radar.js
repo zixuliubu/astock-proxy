@@ -31,10 +31,10 @@ async function fetchDragonTigerList(date, limit = 30) {
     reason: r.EXPLAIN || r.BILLBOARD_TYPE || '',
     close: n(r.CLOSE_PRICE),
     changePct: n(r.CHANGE_RATE),
-    buyAmount: n(r.BUY_AMT),
-    sellAmount: n(r.SELL_AMT),
+    buyAmount: n(r.BUY_AMT || r.BILLBOARD_BUY_AMT),
+    sellAmount: n(r.SELL_AMT || r.BILLBOARD_SELL_AMT),
     netAmount: n(r.BILLBOARD_NET_AMT),
-    amount: n(r.AMOUNT),
+    amount: n(r.AMOUNT || r.ACCUM_AMOUNT),
     turnover: n(r.TURNOVERRATE),
   })).filter(x => x.code);
 }
@@ -68,7 +68,8 @@ function scoreOne(listRow, detail) {
     if (salesDeptNet > 0) { score += 6; positives.push('营业部资金净买入'); }
     if (lhasaNet > 0) { score -= 8; risks.push('拉萨系净买入，次日波动可能加大'); }
     if (concentration !== null && concentration !== undefined && concentration >= 0.45) { score -= 10; risks.push('买一集中度较高，一家独大风险'); }
-    if (status === 'listed_detail_missing') { score -= 4; diagnostics.push('已上榜但席位明细未返回，可用列表级数据，需 debug 进一步确认'); }
+    if (status === 'listed_detail_missing') { score -= 4; diagnostics.push('已上榜但席位明细未返回，需单票 deep=true 进一步确认'); }
+    if (status === 'listed_detail_light') { score -= 2; diagnostics.push('轻量模式：已确认上榜，但未展开席位明细；不能当完整席位质量结论'); }
     if (status === 'fetch_error') { score -= 8; diagnostics.push('龙虎榜列表/明细抓取异常'); }
   }
 
@@ -78,6 +79,7 @@ function scoreOne(listRow, detail) {
   score = Math.max(0, Math.min(100, Math.round(score)));
   let label = '中性榜';
   if (status === 'not_on_list') label = '未上榜';
+  else if (status === 'listed_detail_light') label = '已上榜轻量确认';
   else if (status === 'listed_detail_missing') label = '已上榜但席位缺失';
   else if (score >= 80) label = '高质量合力榜';
   else if (score >= 65) label = '偏强榜';
@@ -125,6 +127,7 @@ function buildRadar(scored) {
     institutionNetBuy: [...list].filter(x => (x.summary.institutionNetYi || 0) > 0).sort((a, b) => (b.summary.institutionNetYi || 0) - (a.summary.institutionNetYi || 0)).slice(0, 10),
     suspectedHotMoney: [...list].filter(x => (x.summary.suspectedHotMoneyNetYi || 0) > 0).sort((a, b) => (b.summary.suspectedHotMoneyNetYi || 0) - (a.summary.suspectedHotMoneyNetYi || 0)).slice(0, 10),
     lhasaHeavy: [...list].filter(x => (x.summary.lhasaNetYi || 0) > 0).sort((a, b) => (b.summary.lhasaNetYi || 0) - (a.summary.lhasaNetYi || 0)).slice(0, 10),
+    detailLight: [...list].filter(x => x.status === 'listed_detail_light').slice(0, 20),
     detailMissing: [...list].filter(x => x.status === 'listed_detail_missing').slice(0, 20),
     notOnList: [...list].filter(x => x.status === 'not_on_list').slice(0, 20),
     highRisk: [...list].filter(x => x.status !== 'not_on_list' && (x.score < 50 || (x.risks || []).length)).sort((a, b) => a.score - b.score).slice(0, 10),
@@ -146,19 +149,19 @@ async function fetchRadar({ date, symbols, limit }) {
 
   const scored = [];
   for (const row of list.slice(0, 20)) {
-    const detail = await fetchDragonTigerDetail({ date: tradeDate, symbol: row.code });
+    const detail = await fetchDragonTigerDetail({ date: tradeDate, symbol: row.code, deep: false });
     scored.push(scoreOne(row, detail));
   }
 
   return {
     success: true,
-    mode: 'dragon_tiger_seat_radar_v2',
+    mode: 'dragon_tiger_seat_radar_v3',
     tradeDate,
     count: scored.length,
     statusSummary: scored.reduce((acc, x) => { acc[x.status || 'unknown'] = (acc[x.status || 'unknown'] || 0) + 1; return acc; }, {}),
     data: scored,
     radar: buildRadar(scored),
-    note: '席位雷达只用于盘后验证和次日对手盘质量判断；未上榜、已上榜但明细缺失、明细成功会分开标记。游资/量化/拉萨为规则疑似识别，非官方身份确认。',
+    note: '席位雷达默认轻量确认是否上榜，不展开席位明细，避免 Vercel 超时；需要真实营业部字段时单票调用 dragon-tiger-detail 或 debug 的 deep=true。游资/量化/拉萨为规则疑似识别，非官方身份确认。',
   };
 }
 
@@ -170,7 +173,7 @@ module.exports = async (req, res) => {
   const symbols = req.query.symbols || req.query.symbol || req.query.code;
   const limit = Number(req.query.limit || 30);
   const ttlMs = Math.max(30000, Math.min(Number(req.query.ttlMs || 300000) || 300000, 900000));
-  const key = `dragon-tiger-seat-radar:v2:${formatDate(date)}:${symbols || ''}:limit=${limit}`;
+  const key = `dragon-tiger-seat-radar:v3:${formatDate(date)}:${symbols || ''}:limit=${limit}`;
 
   try {
     const { value, cached: cacheHit } = await cached(key, ttlMs, async () => okBase(await fetchRadar({ date, symbols, limit })));
@@ -178,7 +181,7 @@ module.exports = async (req, res) => {
   } catch (err) {
     return json(res, 200, okBase({
       success: false,
-      mode: 'dragon_tiger_seat_radar_v2',
+      mode: 'dragon_tiger_seat_radar_v3',
       error: String(err && err.message ? err.message : err),
       data: [],
       radar: buildRadar([]),
