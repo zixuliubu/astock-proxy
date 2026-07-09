@@ -2,12 +2,15 @@ const { json, setCors, cleanCode, parseSymbols, requestJson, buildUrl, okBase, c
 const { tagSeat, summarizeSeats } = require('./_seat-tags');
 
 const EASTMONEY_DATA_URL = 'https://datacenter-web.eastmoney.com/api/data/v1/get';
+const LIST_REPORT = 'RPT_DAILYBILLBOARD_DETAILS';
 
 const DETAIL_REPORTS = [
   'RPT_BILLBOARD_DAILYDETAILS',
   'RPT_DAILYBILLBOARD_DAILYDETAILS',
   'RPT_BILLBOARD_TRADEDETAILS',
   'RPT_DAILYBILLBOARD_TRADEDETAILS',
+  'RPT_BILLBOARD_DETAILS',
+  'RPT_DAILYBILLBOARD_DETAILS',
 ];
 
 function todayISO() {
@@ -34,9 +37,29 @@ function n(v) {
   return Number.isFinite(num) ? num : 0;
 }
 
+function rowCode(row) {
+  return cleanCode(pick(row, ['SECURITY_CODE', 'SECUCODE', 'CODE', 'STOCK_CODE'], ''));
+}
+
+function compactListRow(row) {
+  if (!row) return null;
+  return {
+    tradeDate: pick(row, ['TRADE_DATE'], ''),
+    code: rowCode(row),
+    name: pick(row, ['SECURITY_NAME_ABBR', 'SECURITY_NAME', 'STOCK_NAME'], ''),
+    reason: pick(row, ['EXPLAIN', 'BILLBOARD_TYPE', 'REASON'], ''),
+    close: n(pick(row, ['CLOSE_PRICE'], 0)),
+    changePct: n(pick(row, ['CHANGE_RATE'], 0)),
+    buyAmount: n(pick(row, ['BUY_AMT'], 0)),
+    sellAmount: n(pick(row, ['SELL_AMT'], 0)),
+    netAmount: n(pick(row, ['BILLBOARD_NET_AMT'], 0)),
+    turnover: n(pick(row, ['TURNOVERRATE'], 0)),
+    amount: n(pick(row, ['AMOUNT'], 0)),
+  };
+}
+
 function normalizeAmount(v) {
   const value = n(v);
-  // 东方财富多数金额字段单位为元；若上游返回万元量级，此处保持原值并在 amountYi 中体现。
   return value;
 }
 
@@ -84,13 +107,13 @@ function normalizeDetailRows(rows) {
     });
 }
 
-async function fetchEastmoneyReport(reportName, tradeDate, symbol) {
+async function fetchReport({ reportName, tradeDate, symbol, filterOverride, sortColumns = 'TRADE_DATE,SECURITY_CODE', sortTypes = '-1,1', pageSize = 100 }) {
   const code = cleanCode(symbol);
-  const filter = `(TRADE_DATE='${tradeDate}')(SECURITY_CODE='${code}')`;
+  const filter = filterOverride || `(TRADE_DATE='${tradeDate}')(SECURITY_CODE='${code}')`;
   const url = buildUrl(EASTMONEY_DATA_URL, {
-    sortColumns: 'TRADE_DATE,SECURITY_CODE,BUY_AMT',
-    sortTypes: '-1,1,-1',
-    pageSize: 100,
+    sortColumns,
+    sortTypes,
+    pageSize,
     pageNumber: 1,
     reportName,
     columns: 'ALL',
@@ -104,7 +127,24 @@ async function fetchEastmoneyReport(reportName, tradeDate, symbol) {
     headers: { Referer: 'https://data.eastmoney.com/' },
   });
   const rows = data && data.result && Array.isArray(data.result.data) ? data.result.data : [];
-  return { reportName, rows, rawCount: rows.length };
+  return { reportName, filter, rows, rawCount: rows.length, sampleKeys: rows[0] ? Object.keys(rows[0]).slice(0, 60) : [] };
+}
+
+async function fetchListRow(tradeDate, code) {
+  const result = await fetchReport({
+    reportName: LIST_REPORT,
+    tradeDate,
+    symbol: code,
+    filterOverride: `(TRADE_DATE='${tradeDate}')`,
+    pageSize: 200,
+  });
+  const matches = result.rows.filter(r => rowCode(r) === code);
+  return {
+    rawCount: result.rawCount,
+    matchCount: matches.length,
+    listRow: matches[0] ? compactListRow(matches[0]) : null,
+    sampleKeys: result.sampleKeys,
+  };
 }
 
 async function fetchDragonTigerDetail({ date, symbol }) {
@@ -112,44 +152,95 @@ async function fetchDragonTigerDetail({ date, symbol }) {
   if (!code) throw new Error('Missing symbol, e.g. ?symbol=002185');
   const tradeDate = formatDate(date);
   const attempts = [];
+  let listCheck = null;
+
+  try {
+    listCheck = await fetchListRow(tradeDate, code);
+    attempts.push({ type: 'list', reportName: LIST_REPORT, rawCount: listCheck.rawCount, matchCount: listCheck.matchCount });
+    if (!listCheck.listRow) {
+      return {
+        success: false,
+        mode: 'dragon_tiger_detail_v2',
+        status: 'not_on_list',
+        source: 'eastmoney_datacenter',
+        tradeDate,
+        code,
+        listRow: null,
+        count: 0,
+        seats: [],
+        summary: summarizeSeats([]),
+        attempts,
+        explanation: '该股票在当日龙虎榜列表中未出现，因此没有席位明细。',
+      };
+    }
+  } catch (err) {
+    attempts.push({ type: 'list', reportName: LIST_REPORT, error: String(err && err.message ? err.message : err) });
+  }
+
+  const filters = [
+    `(TRADE_DATE='${tradeDate}')(SECURITY_CODE='${code}')`,
+    `(TRADE_DATE='${tradeDate}')`,
+    `(SECURITY_CODE='${code}')`,
+  ];
 
   for (const reportName of DETAIL_REPORTS) {
-    try {
-      const result = await fetchEastmoneyReport(reportName, tradeDate, code);
-      attempts.push({ reportName, rawCount: result.rawCount });
-      if (result.rows.length) {
-        const seats = normalizeDetailRows(result.rows);
-        return {
-          success: true,
-          mode: 'dragon_tiger_detail_v1',
-          source: 'eastmoney_datacenter',
+    for (const filterOverride of filters) {
+      try {
+        const result = await fetchReport({
           reportName,
           tradeDate,
-          code,
-          count: seats.length,
-          seats,
-          summary: summarizeSeats(seats),
-          attempts,
-          note: '席位标签中，机构专用/沪股通/深股通为名称直接识别；游资/量化/拉萨为规则疑似识别，非官方身份确认。',
-        };
+          symbol: code,
+          filterOverride,
+          sortColumns: 'TRADE_DATE,SECURITY_CODE,BUY_AMT',
+          sortTypes: '-1,1,-1',
+          pageSize: 200,
+        });
+        const matched = result.rows.filter(r => rowCode(r) === code || JSON.stringify(r).includes(code));
+        attempts.push({ reportName, filter: filterOverride, rawCount: result.rawCount, matchCount: matched.length, sampleKeys: result.sampleKeys });
+        const rowsForNormalize = matched.length ? matched : (filterOverride.includes('SECURITY_CODE') ? result.rows : []);
+        if (rowsForNormalize.length) {
+          const seats = normalizeDetailRows(rowsForNormalize);
+          if (seats.length) {
+            return {
+              success: true,
+              mode: 'dragon_tiger_detail_v2',
+              status: 'detail_ok',
+              source: 'eastmoney_datacenter',
+              reportName,
+              filter: filterOverride,
+              tradeDate,
+              code,
+              listRow: listCheck ? listCheck.listRow : null,
+              count: seats.length,
+              seats,
+              summary: summarizeSeats(seats),
+              attempts,
+              note: '席位标签中，机构专用/沪股通/深股通为名称直接识别；游资/量化/拉萨为规则疑似识别，非官方身份确认。',
+            };
+          }
+        }
+      } catch (err) {
+        attempts.push({ reportName, filter: filterOverride, error: String(err && err.message ? err.message : err) });
       }
-    } catch (err) {
-      attempts.push({ reportName, error: String(err && err.message ? err.message : err) });
     }
   }
 
   return {
     success: false,
-    mode: 'dragon_tiger_detail_v1',
+    mode: 'dragon_tiger_detail_v2',
+    status: listCheck && listCheck.listRow ? 'listed_detail_missing' : 'fetch_error',
     source: 'eastmoney_datacenter',
     tradeDate,
     code,
+    listRow: listCheck ? listCheck.listRow : null,
     count: 0,
     seats: [],
     summary: summarizeSeats([]),
     attempts,
     error: 'No seat detail rows returned from fallback reports',
-    note: '可能原因：该票当日未上龙虎榜、龙虎榜尚未更新，或东方财富席位明细 reportName 发生变化。',
+    explanation: listCheck && listCheck.listRow
+      ? '该股票已在龙虎榜列表中出现，但当前候选席位明细表没有返回可解析席位行；可调用 /api/dragon-tiger-debug 查看 reportName/字段诊断。'
+      : '龙虎榜列表检查失败或上游异常，暂时无法确认是否上榜。',
   };
 }
 
@@ -162,7 +253,7 @@ module.exports = async (req, res) => {
   if (!symbols.length) return json(res, 400, { success: false, error: 'Missing symbol/symbols, e.g. ?date=20260709&symbol=002185' });
 
   const ttlMs = Math.max(30000, Math.min(Number(req.query.ttlMs || 300000) || 300000, 900000));
-  const key = `dragon-tiger-detail:v1:${formatDate(date)}:${symbols.join(',')}`;
+  const key = `dragon-tiger-detail:v2:${formatDate(date)}:${symbols.join(',')}`;
 
   try {
     const { value, cached: cacheHit } = await cached(key, ttlMs, async () => {
@@ -171,11 +262,12 @@ module.exports = async (req, res) => {
         details.push(await fetchDragonTigerDetail({ date, symbol }));
       }
       return okBase({
-        mode: 'dragon_tiger_detail_bundle_v1',
+        mode: 'dragon_tiger_detail_bundle_v2',
         count: details.length,
         symbols,
         date: formatDate(date),
         details,
+        statusSummary: details.reduce((acc, x) => { acc[x.status || 'unknown'] = (acc[x.status || 'unknown'] || 0) + 1; return acc; }, {}),
         note: '龙虎榜席位明细通常盘后更新；游资识别为规则疑似标签，不能当官方事实。',
       });
     });
@@ -183,7 +275,7 @@ module.exports = async (req, res) => {
   } catch (err) {
     return json(res, 200, okBase({
       success: false,
-      mode: 'dragon_tiger_detail_bundle_v1',
+      mode: 'dragon_tiger_detail_bundle_v2',
       error: String(err && err.message ? err.message : err),
       symbols,
       details: [],
@@ -192,3 +284,4 @@ module.exports = async (req, res) => {
 };
 
 module.exports.fetchDragonTigerDetail = fetchDragonTigerDetail;
+module.exports.formatDate = formatDate;
