@@ -1,10 +1,10 @@
 const { json, setCors, okBase } = require('./_stock-utils');
 
-const SERVER_VERSION = '1.7.8';
+const SERVER_VERSION = '1.7.9';
 const ENDPOINTS = [
   'quote', 'market-overview', 'sentiment', 'sector',
   'limit-up', 'broken-limit', 'limit-down', 'lianban-ladder',
-  'watchlist', 'dragon-tiger', 'dragon-tiger-detail', 'dragon-tiger-seat-radar', 'dragon-tiger-debug', 'dragon-tiger-seat-code-probe', 'news-catalysts',
+  'watchlist', 'dragon-tiger', 'dragon-tiger-detail', 'dragon-tiger-seat-radar', 'dragon-tiger-debug', 'dragon-tiger-seat-code-probe', 'dragon-tiger-seat-em', 'news-catalysts',
   'intraday-nodes', 'capture-node', 'intraday-timeline',
   'daily-review-bundle', 'daily-review-bundle-base', 'daily-review-plus',
   'stock-concepts', 'stock-popularity', 'stock-capital-flow', 'stock-news', 'stock-kline',
@@ -29,6 +29,7 @@ function publicChecks() {
       dragonTigerSeat: 'no, on-demand only with short cache',
       dragonTigerDebug: 'no, diagnostic read-only endpoint with short cache',
       dragonTigerSeatCodeProbe: 'no, diagnostic read-only endpoint with short cache',
+      dragonTigerSeatEm: 'no, on-demand Eastmoney seat endpoint with short cache',
     },
     capacityPolicy: {
       defaultSampling: '10-minute intraday nodes via GitHub Actions',
@@ -36,9 +37,10 @@ function publicChecks() {
       fourthBatchDefault: 'only watchlist-auto-label enters daily-review-bundle; concept-members/sector-money-flow/limit-reason are on-demand',
       orderbookLite: 'on-demand only; max 8 symbols; default 5s cache; not Level-2; not all-market scan',
       watchlistOrderbook: 'on-demand observation-pool aggregation; max 8 symbols; not included in daily-review-bundle by default',
-      dragonTigerSeat: 'default lightweight list-status mode; single-symbol deep=true prioritizes TRADE_ID filters for seat-field discovery',
+      dragonTigerSeat: 'legacy diagnostic path; prefer dragon-tiger-seat-em for real buy/sell department seats',
       dragonTigerDebug: 'default lightweight mode to avoid Vercel timeout; single-symbol deep=true prioritizes TRADE_ID filters and looks for real seat fields',
       dragonTigerSeatCodeProbe: 'single-symbol diagnostic endpoint; extracts BUY_SEAT / SELL_SEAT codes and probes candidate department dictionary reports',
+      dragonTigerSeatEm: 'single-symbol endpoint using Eastmoney RPT_BILLBOARD_DAILYDETAILSBUY and RPT_BILLBOARD_DAILYDETAILSSELL, verified from AKShare implementation',
     },
     envPresence: {
       CAPTURE_SECRET: Boolean(process.env.CAPTURE_SECRET),
