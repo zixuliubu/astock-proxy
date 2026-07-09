@@ -11,6 +11,7 @@ const handlers = {
   'dragon-tiger': () => require('./dragon-tiger'),
   'dragon-tiger-detail': () => require('./dragon-tiger-detail'),
   'dragon-tiger-seat-radar': () => require('./dragon-tiger-seat-radar'),
+  'dragon-tiger-debug': () => require('./dragon-tiger-debug'),
   'news-catalysts': () => require('./news-catalysts'),
   'intraday-nodes': () => require('./intraday-nodes'),
   'capture-node': () => require('./capture-node'),
