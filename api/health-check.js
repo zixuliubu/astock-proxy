@@ -1,6 +1,6 @@
 const { json, setCors, okBase } = require('./_stock-utils');
 
-const SERVER_VERSION = '1.7.5';
+const SERVER_VERSION = '1.7.6';
 const ENDPOINTS = [
   'quote', 'market-overview', 'sentiment', 'sector',
   'limit-up', 'broken-limit', 'limit-down', 'lianban-ladder',
@@ -35,8 +35,8 @@ function publicChecks() {
       fourthBatchDefault: 'only watchlist-auto-label enters daily-review-bundle; concept-members/sector-money-flow/limit-reason are on-demand',
       orderbookLite: 'on-demand only; max 8 symbols; default 5s cache; not Level-2; not all-market scan',
       watchlistOrderbook: 'on-demand observation-pool aggregation; max 8 symbols; not included in daily-review-bundle by default',
-      dragonTigerSeat: 'on-demand after-hours analysis; seat tags are rules-based and not official identity confirmation',
-      dragonTigerDebug: 'on-demand diagnostic endpoint; separates not_on_list, summary_candidate_only, seat_candidate_found, listed_detail_missing, fetch_error; v3 adds TRADE_ID drill-down filters',
+      dragonTigerSeat: 'default lightweight list-status mode; single-symbol deep=true runs TRADE_ID drilldown for seat-field discovery',
+      dragonTigerDebug: 'default lightweight mode to avoid Vercel timeout; single-symbol deep=true runs TRADE_ID drilldown and looks for real seat fields',
     },
     envPresence: {
       CAPTURE_SECRET: Boolean(process.env.CAPTURE_SECRET),
