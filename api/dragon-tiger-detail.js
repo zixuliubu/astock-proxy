@@ -159,19 +159,18 @@ async function fetchListRow(tradeDate, code) {
 }
 
 function buildFilters(tradeDate, code, tradeIds = []) {
-  const filters = [
-    `(TRADE_DATE='${tradeDate}')(SECURITY_CODE='${code}')`,
-    `(TRADE_DATE='${tradeDate}')`,
-    `(SECURITY_CODE='${code}')`,
-  ];
+  const filters = [];
   for (const id of tradeIds || []) {
-    filters.push(`(TRADE_ID='${id}')`);
-    filters.push(`(TRADE_ID=${id})`);
     filters.push(`(TRADE_DATE='${tradeDate}')(TRADE_ID='${id}')`);
     filters.push(`(TRADE_DATE='${tradeDate}')(TRADE_ID=${id})`);
     filters.push(`(SECURITY_CODE='${code}')(TRADE_ID='${id}')`);
     filters.push(`(SECURITY_CODE='${code}')(TRADE_ID=${id})`);
+    filters.push(`(TRADE_ID='${id}')`);
+    filters.push(`(TRADE_ID=${id})`);
   }
+  filters.push(`(TRADE_DATE='${tradeDate}')(SECURITY_CODE='${code}')`);
+  filters.push(`(TRADE_DATE='${tradeDate}')`);
+  filters.push(`(SECURITY_CODE='${code}')`);
   return [...new Set(filters)];
 }
 
@@ -291,7 +290,7 @@ async function fetchDragonTigerDetail({ date, symbol, deep = false, maxReports =
     attempts,
     error: 'No seat detail rows returned from fallback reports',
     explanation: listCheck && listCheck.listRow
-      ? '该股票已在龙虎榜列表中出现，但当前候选席位明细表没有返回可解析席位行；deep=true 已尝试 SECURITY_CODE 与 TRADE_ID 下钻过滤。'
+      ? '该股票已在龙虎榜列表中出现，但当前候选席位明细表没有返回可解析席位行；deep=true 已优先尝试 TRADE_ID 下钻过滤。'
       : '龙虎榜列表检查失败或上游异常，暂时无法确认是否上榜。',
   };
 }
@@ -310,7 +309,7 @@ module.exports = async (req, res) => {
   const maxReports = Number(req.query.maxReports || 6);
   const maxFilters = Number(req.query.maxFilters || 18);
   const ttlMs = Math.max(30000, Math.min(Number(req.query.ttlMs || 300000) || 300000, 900000));
-  const key = `dragon-tiger-detail:v4:${formatDate(date)}:${symbols.join(',')}:deep=${deep}:mr=${maxReports}:mf=${maxFilters}`;
+  const key = `dragon-tiger-detail:v5:${formatDate(date)}:${symbols.join(',')}:deep=${deep}:mr=${maxReports}:mf=${maxFilters}`;
 
   try {
     const { value, cached: cacheHit } = await cached(key, ttlMs, async () => {
@@ -319,7 +318,7 @@ module.exports = async (req, res) => {
         details.push(await fetchDragonTigerDetail({ date, symbol, deep, maxReports, maxFilters }));
       }
       return okBase({
-        mode: 'dragon_tiger_detail_bundle_v4',
+        mode: 'dragon_tiger_detail_bundle_v5',
         count: details.length,
         symbols,
         date: formatDate(date),
@@ -328,7 +327,7 @@ module.exports = async (req, res) => {
         details,
         statusSummary: details.reduce((acc, x) => { acc[x.status || 'unknown'] = (acc[x.status || 'unknown'] || 0) + 1; return acc; }, {}),
         note: deep
-          ? '深度模式：已加入 TRADE_ID 下钻过滤；游资识别为规则疑似标签，不能当官方事实。'
+          ? '深度模式：已优先使用 TRADE_ID 下钻过滤；游资识别为规则疑似标签，不能当官方事实。'
           : '轻量模式：默认只确认是否上榜并返回 TRADE_ID，避免 Vercel 超时。单票 deep=true 才尝试席位营业部明细。',
       });
     });
@@ -336,7 +335,7 @@ module.exports = async (req, res) => {
   } catch (err) {
     return json(res, 200, okBase({
       success: false,
-      mode: 'dragon_tiger_detail_bundle_v4',
+      mode: 'dragon_tiger_detail_bundle_v5',
       error: String(err && err.message ? err.message : err),
       symbols,
       details: [],
