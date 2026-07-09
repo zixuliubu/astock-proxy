@@ -68,8 +68,7 @@ function compactListRow(row) {
 }
 
 function normalizeAmount(v) {
-  const value = n(v);
-  return value;
+  return n(v);
 }
 
 function rowToSeat(row, idx) {
@@ -108,7 +107,7 @@ function rowToSeat(row, idx) {
 function normalizeDetailRows(rows) {
   return (Array.isArray(rows) ? rows : [])
     .map(rowToSeat)
-    .filter(x => x.seatName || x.buyAmount || x.sellAmount || x.netAmount)
+    .filter(x => x.seatName && (x.buyAmount || x.sellAmount || x.netAmount))
     .sort((a, b) => {
       const absB = Math.abs(b.netAmount || 0) || (b.buyAmount || 0) || (b.sellAmount || 0);
       const absA = Math.abs(a.netAmount || 0) || (a.buyAmount || 0) || (a.sellAmount || 0);
@@ -132,7 +131,7 @@ async function fetchReport({ reportName, tradeDate, symbol, filterOverride, sort
     _: Date.now(),
   });
   const data = await requestJson(url, {
-    timeoutMs: 10000,
+    timeoutMs: 8000,
     headers: { Referer: 'https://data.eastmoney.com/' },
   });
   const rows = data && data.result && Array.isArray(data.result.data) ? data.result.data : [];
@@ -176,7 +175,7 @@ function buildFilters(tradeDate, code, tradeIds = []) {
   return [...new Set(filters)];
 }
 
-async function fetchDragonTigerDetail({ date, symbol }) {
+async function fetchDragonTigerDetail({ date, symbol, deep = false, maxReports = 6, maxFilters = 18 }) {
   const code = cleanCode(symbol);
   if (!code) throw new Error('Missing symbol, e.g. ?symbol=002185');
   const tradeDate = formatDate(date);
@@ -189,7 +188,7 @@ async function fetchDragonTigerDetail({ date, symbol }) {
     if (!listCheck.listRow) {
       return {
         success: false,
-        mode: 'dragon_tiger_detail_v3',
+        mode: 'dragon_tiger_detail_v4',
         status: 'not_on_list',
         source: 'eastmoney_datacenter',
         tradeDate,
@@ -208,9 +207,31 @@ async function fetchDragonTigerDetail({ date, symbol }) {
     attempts.push({ type: 'list', reportName: LIST_REPORT, error: String(err && err.message ? err.message : err) });
   }
 
-  const filters = buildFilters(tradeDate, code, listCheck ? listCheck.tradeIds : []);
+  if (!deep) {
+    return {
+      success: false,
+      mode: 'dragon_tiger_detail_v4',
+      status: listCheck && listCheck.listRow ? 'listed_detail_light' : 'fetch_error',
+      source: 'eastmoney_datacenter',
+      tradeDate,
+      code,
+      listRow: listCheck ? listCheck.listRow : null,
+      listRows: listCheck ? listCheck.listRows : [],
+      tradeIds: listCheck ? listCheck.tradeIds : [],
+      count: 0,
+      seats: [],
+      summary: summarizeSeats([]),
+      attempts,
+      explanation: listCheck && listCheck.listRow
+        ? '轻量模式：该股票已上龙虎榜，但未展开 TRADE_ID 深度席位搜索。需要席位营业部明细时请单票加 deep=true。'
+        : '龙虎榜列表检查失败或上游异常，暂时无法确认是否上榜。',
+    };
+  }
 
-  for (const reportName of DETAIL_REPORTS) {
+  const filters = buildFilters(tradeDate, code, listCheck ? listCheck.tradeIds : []).slice(0, Math.max(3, Math.min(Number(maxFilters) || 18, 30)));
+  const reports = DETAIL_REPORTS.slice(0, Math.max(1, Math.min(Number(maxReports) || 6, DETAIL_REPORTS.length)));
+
+  for (const reportName of reports) {
     for (const filterOverride of filters) {
       try {
         const result = await fetchReport({
@@ -230,7 +251,7 @@ async function fetchDragonTigerDetail({ date, symbol }) {
           if (seats.length) {
             return {
               success: true,
-              mode: 'dragon_tiger_detail_v3',
+              mode: 'dragon_tiger_detail_v4',
               status: 'detail_ok',
               source: 'eastmoney_datacenter',
               reportName,
@@ -256,7 +277,7 @@ async function fetchDragonTigerDetail({ date, symbol }) {
 
   return {
     success: false,
-    mode: 'dragon_tiger_detail_v3',
+    mode: 'dragon_tiger_detail_v4',
     status: listCheck && listCheck.listRow ? 'listed_detail_missing' : 'fetch_error',
     source: 'eastmoney_datacenter',
     tradeDate,
@@ -270,7 +291,7 @@ async function fetchDragonTigerDetail({ date, symbol }) {
     attempts,
     error: 'No seat detail rows returned from fallback reports',
     explanation: listCheck && listCheck.listRow
-      ? '该股票已在龙虎榜列表中出现，但当前候选席位明细表没有返回可解析席位行；已尝试 SECURITY_CODE 与 TRADE_ID 下钻过滤，可调用 /api/dragon-tiger-debug 查看 reportName/字段诊断。'
+      ? '该股票已在龙虎榜列表中出现，但当前候选席位明细表没有返回可解析席位行；deep=true 已尝试 SECURITY_CODE 与 TRADE_ID 下钻过滤。'
       : '龙虎榜列表检查失败或上游异常，暂时无法确认是否上榜。',
   };
 }
@@ -283,30 +304,39 @@ module.exports = async (req, res) => {
   const symbols = parseSymbols(req.query.symbols || req.query.symbol || req.query.code, 8);
   if (!symbols.length) return json(res, 400, { success: false, error: 'Missing symbol/symbols, e.g. ?date=20260709&symbol=002185' });
 
+  const deepRequested = req.query.deep === 'true' || req.query.full === 'true';
+  const deep = deepRequested && symbols.length <= 2;
+  const skippedDeepReason = deepRequested && !deep ? 'deep=true only runs for at most 2 symbols at a time to avoid Vercel timeout; retry with one symbol.' : undefined;
+  const maxReports = Number(req.query.maxReports || 6);
+  const maxFilters = Number(req.query.maxFilters || 18);
   const ttlMs = Math.max(30000, Math.min(Number(req.query.ttlMs || 300000) || 300000, 900000));
-  const key = `dragon-tiger-detail:v3:${formatDate(date)}:${symbols.join(',')}`;
+  const key = `dragon-tiger-detail:v4:${formatDate(date)}:${symbols.join(',')}:deep=${deep}:mr=${maxReports}:mf=${maxFilters}`;
 
   try {
     const { value, cached: cacheHit } = await cached(key, ttlMs, async () => {
       const details = [];
       for (const symbol of symbols) {
-        details.push(await fetchDragonTigerDetail({ date, symbol }));
+        details.push(await fetchDragonTigerDetail({ date, symbol, deep, maxReports, maxFilters }));
       }
       return okBase({
-        mode: 'dragon_tiger_detail_bundle_v3',
+        mode: 'dragon_tiger_detail_bundle_v4',
         count: details.length,
         symbols,
         date: formatDate(date),
+        deep,
+        skippedDeepReason,
         details,
         statusSummary: details.reduce((acc, x) => { acc[x.status || 'unknown'] = (acc[x.status || 'unknown'] || 0) + 1; return acc; }, {}),
-        note: '龙虎榜席位明细通常盘后更新；游资识别为规则疑似标签，不能当官方事实。v3 已加入 TRADE_ID 下钻过滤。',
+        note: deep
+          ? '深度模式：已加入 TRADE_ID 下钻过滤；游资识别为规则疑似标签，不能当官方事实。'
+          : '轻量模式：默认只确认是否上榜并返回 TRADE_ID，避免 Vercel 超时。单票 deep=true 才尝试席位营业部明细。',
       });
     });
     return json(res, 200, { ...value, cacheHit });
   } catch (err) {
     return json(res, 200, okBase({
       success: false,
-      mode: 'dragon_tiger_detail_bundle_v3',
+      mode: 'dragon_tiger_detail_bundle_v4',
       error: String(err && err.message ? err.message : err),
       symbols,
       details: [],
