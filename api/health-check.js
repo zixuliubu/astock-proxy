@@ -1,6 +1,6 @@
 const { json, setCors, okBase } = require('./_stock-utils');
 
-const SERVER_VERSION = '1.7.0';
+const SERVER_VERSION = '1.7.2';
 const ENDPOINTS = [
   'quote', 'market-overview', 'sentiment', 'sector',
   'limit-up', 'broken-limit', 'limit-down', 'lianban-ladder',
@@ -9,6 +9,7 @@ const ENDPOINTS = [
   'daily-review-bundle', 'daily-review-bundle-base', 'daily-review-plus',
   'stock-concepts', 'stock-popularity', 'stock-capital-flow', 'stock-news', 'stock-kline',
   'review-rules', 'concept-members', 'sector-money-flow', 'limit-reason', 'watchlist-auto-label',
+  'orderbook-lite',
   'openapi', 'health-check',
 ];
 
@@ -23,11 +24,13 @@ function publicChecks() {
     redisWrites: {
       captureNode: 'yes, only when capture-node is called with CAPTURE_SECRET',
       normalReadApis: 'no',
+      orderbookLite: 'no, in-memory short cache only',
     },
     capacityPolicy: {
       defaultSampling: '10-minute intraday nodes via GitHub Actions',
       heavyModules: 'not deployed on Vercel; keep for Cloudflare/VPS later',
       fourthBatchDefault: 'only watchlist-auto-label enters daily-review-bundle; concept-members/sector-money-flow/limit-reason are on-demand',
+      orderbookLite: 'on-demand only; max 8 symbols; default 5s cache; not Level-2; not all-market scan',
     },
     envPresence: {
       CAPTURE_SECRET: Boolean(process.env.CAPTURE_SECRET),
