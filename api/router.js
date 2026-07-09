@@ -26,6 +26,7 @@ const handlers = {
   'sector-money-flow': () => require('./sector-money-flow'),
   'limit-reason': () => require('./limit-reason'),
   'watchlist-auto-label': () => require('./watchlist-auto-label'),
+  'orderbook-lite': () => require('./orderbook-lite'),
   'health-check': () => require('./health-check'),
   openapi: () => require('./openapi'),
 };
