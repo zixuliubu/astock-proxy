@@ -100,7 +100,7 @@ async function fetchReport({ reportName, filter, pageSize = 100 }) {
     _: Date.now(),
   });
   const data = await requestJson(url, {
-    timeoutMs: 10000,
+    timeoutMs: 8000,
     headers: { Referer: 'https://data.eastmoney.com/' },
   });
   const rows = data && data.result && Array.isArray(data.result.data) ? data.result.data : [];
@@ -116,7 +116,38 @@ async function fetchReport({ reportName, filter, pageSize = 100 }) {
   };
 }
 
-async function debugOne({ date, symbol }) {
+function makeShallowResult({ code, tradeDate, listStatus, listRow, listRows, tradeIds, diagnostics }) {
+  let status = 'summary_candidate_only';
+  if (listStatus === 'not_on_list') status = 'not_on_list';
+  if (listStatus === 'list_fetch_error') status = 'fetch_error';
+  return {
+    code,
+    tradeDate,
+    status,
+    listStatus,
+    listRow,
+    listRows,
+    tradeIds,
+    shallow: true,
+    seatCandidate: null,
+    summaryCandidate: listRow ? {
+      reportName: LIST_REPORT,
+      filter: `(TRADE_DATE='${tradeDate}')`,
+      matchCount: listRows.length,
+      fieldClass: { kind: 'summary_detail', seatKeys: [], summaryKeys: SUMMARY_KEYS.filter(k => Object.prototype.hasOwnProperty.call(listRow, k)) },
+      matchRows: listRows,
+    } : null,
+    diagnostics,
+    detailAttempts: [],
+    explanation: status === 'not_on_list'
+      ? '该股票在当日龙虎榜列表中未出现，因此不应期待席位明细。'
+      : status === 'fetch_error'
+        ? '龙虎榜列表抓取异常。'
+        : '轻量诊断模式：该股票已上龙虎榜，但未展开 TRADE_ID 深度席位搜索。需要找席位字段时请单票加 deep=true。',
+  };
+}
+
+async function debugOne({ date, symbol, deep = false, maxReports = 6, maxFilters = 18 }) {
   const tradeDate = formatDate(date);
   const code = cleanCode(symbol);
   const diagnostics = [];
@@ -148,10 +179,15 @@ async function debugOne({ date, symbol }) {
     diagnostics.push({ type: 'list', reportName: LIST_REPORT, error: String(err && err.message ? err.message : err) });
   }
 
-  const detailAttempts = [];
-  const filters = buildFilters(tradeDate, code, tradeIds);
+  if (!deep || listStatus !== 'listed') {
+    return makeShallowResult({ code, tradeDate, listStatus, listRow, listRows, tradeIds, diagnostics });
+  }
 
-  for (const reportName of DETAIL_REPORTS) {
+  const detailAttempts = [];
+  const filters = buildFilters(tradeDate, code, tradeIds).slice(0, Math.max(3, Math.min(Number(maxFilters) || 18, 30)));
+  const reports = DETAIL_REPORTS.slice(0, Math.max(1, Math.min(Number(maxReports) || 6, DETAIL_REPORTS.length)));
+
+  for (const reportName of reports) {
     for (const filter of filters) {
       try {
         const result = await fetchReport({ reportName, filter, pageSize: 200 });
@@ -180,9 +216,7 @@ async function debugOne({ date, symbol }) {
   const anyHit = detailAttempts.find(x => (x.matchCount || 0) > 0) || null;
 
   let status = 'listed_detail_missing';
-  if (listStatus === 'not_on_list') status = 'not_on_list';
-  else if (listStatus === 'list_fetch_error') status = 'fetch_error';
-  else if (seatHit) status = 'seat_candidate_found';
+  if (seatHit) status = 'seat_candidate_found';
   else if (summaryHit) status = 'summary_candidate_only';
   else if (anyHit) status = 'non_seat_candidate_found';
 
@@ -194,17 +228,16 @@ async function debugOne({ date, symbol }) {
     listRow,
     listRows,
     tradeIds,
+    shallow: false,
     seatCandidate: seatHit ? { reportName: seatHit.reportName, filter: seatHit.filter, matchCount: seatHit.matchCount, sampleKeys: seatHit.sampleKeys, fieldClass: seatHit.matchFieldClass, matchRows: seatHit.matchRows } : null,
     summaryCandidate: summaryHit ? { reportName: summaryHit.reportName, filter: summaryHit.filter, matchCount: summaryHit.matchCount, sampleKeys: summaryHit.sampleKeys, fieldClass: summaryHit.matchFieldClass, matchRows: summaryHit.matchRows } : null,
     diagnostics,
     detailAttempts,
-    explanation: status === 'not_on_list'
-      ? '该股票在当日龙虎榜列表中未出现，因此不应期待席位明细。'
-      : status === 'seat_candidate_found'
-        ? '已找到包含席位/营业部字段的候选表，可据此修正正式明细接口。'
-        : status === 'summary_candidate_only'
-          ? '仅找到个股龙虎榜汇总/分原因明细表，没有营业部席位字段，不能当作席位明细。v3 已尝试 TRADE_ID 下钻。'
-          : '股票已上榜或列表状态不明，但当前候选表未返回可用席位字段。v3 已尝试 TRADE_ID 下钻。',
+    explanation: status === 'seat_candidate_found'
+      ? '已找到包含席位/营业部字段的候选表，可据此修正正式明细接口。'
+      : status === 'summary_candidate_only'
+        ? '仅找到个股龙虎榜汇总/分原因明细表，没有营业部席位字段，不能当作席位明细。deep=true 已尝试 TRADE_ID 下钻。'
+        : '股票已上榜，但当前候选表未返回可用席位字段。deep=true 已尝试 TRADE_ID 下钻。',
   };
 }
 
@@ -215,28 +248,37 @@ module.exports = async (req, res) => {
   const symbols = parseSymbols(req.query.symbols || req.query.symbol || req.query.code, 8);
   if (!symbols.length) return json(res, 400, { success: false, error: 'Missing symbols, e.g. ?date=20260709&symbols=002185,600584' });
   const date = req.query.date;
+  const deepRequested = req.query.deep === 'true' || req.query.full === 'true';
+  const deep = deepRequested && symbols.length <= 2;
+  const skippedDeepReason = deepRequested && !deep ? 'deep=true only runs for at most 2 symbols at a time to avoid Vercel timeout; retry with one symbol.' : undefined;
+  const maxReports = Number(req.query.maxReports || 6);
+  const maxFilters = Number(req.query.maxFilters || 18);
   const ttlMs = Math.max(30000, Math.min(Number(req.query.ttlMs || 300000) || 300000, 900000));
-  const key = `dragon-tiger-debug:v3:${formatDate(date)}:${symbols.join(',')}`;
+  const key = `dragon-tiger-debug:v4:${formatDate(date)}:${symbols.join(',')}:deep=${deep}:mr=${maxReports}:mf=${maxFilters}`;
 
   try {
     const { value, cached: cacheHit } = await cached(key, ttlMs, async () => {
       const results = [];
-      for (const symbol of symbols) results.push(await debugOne({ date, symbol }));
+      for (const symbol of symbols) results.push(await debugOne({ date, symbol, deep, maxReports, maxFilters }));
       return okBase({
-        mode: 'dragon_tiger_debug_v3',
+        mode: 'dragon_tiger_debug_v4',
         date: formatDate(date),
         symbols,
         count: results.length,
+        deep,
+        skippedDeepReason,
         statusSummary: results.reduce((acc, x) => { acc[x.status || 'unknown'] = (acc[x.status || 'unknown'] || 0) + 1; return acc; }, {}),
         results,
-        note: '诊断接口用于区分未上榜、汇总表命中、真正席位表命中；v3 已加入 TRADE_ID 下钻过滤，只有包含席位/营业部字段的候选才会标为 seat_candidate_found。',
+        note: deep
+          ? '深度诊断：已加入 TRADE_ID 下钻过滤，只有包含席位/营业部字段的候选才会标为 seat_candidate_found。'
+          : '轻量诊断：默认不展开 TRADE_ID 深度搜索，避免 Vercel 超时。若要找真正席位字段，请单票使用 deep=true。',
       });
     });
     return json(res, 200, { ...value, cacheHit });
   } catch (err) {
     return json(res, 200, okBase({
       success: false,
-      mode: 'dragon_tiger_debug_v3',
+      mode: 'dragon_tiger_debug_v4',
       error: String(err && err.message ? err.message : err),
       symbols,
       results: [],
