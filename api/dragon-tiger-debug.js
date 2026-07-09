@@ -70,19 +70,18 @@ function classifyKeys(keys = []) {
 }
 
 function buildFilters(tradeDate, code, tradeIds = []) {
-  const filters = [
-    `(TRADE_DATE='${tradeDate}')(SECURITY_CODE='${code}')`,
-    `(TRADE_DATE='${tradeDate}')`,
-    `(SECURITY_CODE='${code}')`,
-  ];
+  const filters = [];
   for (const id of tradeIds || []) {
-    filters.push(`(TRADE_ID='${id}')`);
-    filters.push(`(TRADE_ID=${id})`);
     filters.push(`(TRADE_DATE='${tradeDate}')(TRADE_ID='${id}')`);
     filters.push(`(TRADE_DATE='${tradeDate}')(TRADE_ID=${id})`);
     filters.push(`(SECURITY_CODE='${code}')(TRADE_ID='${id}')`);
     filters.push(`(SECURITY_CODE='${code}')(TRADE_ID=${id})`);
+    filters.push(`(TRADE_ID='${id}')`);
+    filters.push(`(TRADE_ID=${id})`);
   }
+  filters.push(`(TRADE_DATE='${tradeDate}')(SECURITY_CODE='${code}')`);
+  filters.push(`(TRADE_DATE='${tradeDate}')`);
+  filters.push(`(SECURITY_CODE='${code}')`);
   return [...new Set(filters)];
 }
 
@@ -236,8 +235,8 @@ async function debugOne({ date, symbol, deep = false, maxReports = 6, maxFilters
     explanation: status === 'seat_candidate_found'
       ? '已找到包含席位/营业部字段的候选表，可据此修正正式明细接口。'
       : status === 'summary_candidate_only'
-        ? '仅找到个股龙虎榜汇总/分原因明细表，没有营业部席位字段，不能当作席位明细。deep=true 已尝试 TRADE_ID 下钻。'
-        : '股票已上榜，但当前候选表未返回可用席位字段。deep=true 已尝试 TRADE_ID 下钻。',
+        ? '仅找到个股龙虎榜汇总/分原因明细表，没有营业部席位字段，不能当作席位明细。deep=true 已优先尝试 TRADE_ID 下钻。'
+        : '股票已上榜，但当前候选表未返回可用席位字段。deep=true 已优先尝试 TRADE_ID 下钻。',
   };
 }
 
@@ -254,14 +253,14 @@ module.exports = async (req, res) => {
   const maxReports = Number(req.query.maxReports || 6);
   const maxFilters = Number(req.query.maxFilters || 18);
   const ttlMs = Math.max(30000, Math.min(Number(req.query.ttlMs || 300000) || 300000, 900000));
-  const key = `dragon-tiger-debug:v4:${formatDate(date)}:${symbols.join(',')}:deep=${deep}:mr=${maxReports}:mf=${maxFilters}`;
+  const key = `dragon-tiger-debug:v5:${formatDate(date)}:${symbols.join(',')}:deep=${deep}:mr=${maxReports}:mf=${maxFilters}`;
 
   try {
     const { value, cached: cacheHit } = await cached(key, ttlMs, async () => {
       const results = [];
       for (const symbol of symbols) results.push(await debugOne({ date, symbol, deep, maxReports, maxFilters }));
       return okBase({
-        mode: 'dragon_tiger_debug_v4',
+        mode: 'dragon_tiger_debug_v5',
         date: formatDate(date),
         symbols,
         count: results.length,
@@ -270,7 +269,7 @@ module.exports = async (req, res) => {
         statusSummary: results.reduce((acc, x) => { acc[x.status || 'unknown'] = (acc[x.status || 'unknown'] || 0) + 1; return acc; }, {}),
         results,
         note: deep
-          ? '深度诊断：已加入 TRADE_ID 下钻过滤，只有包含席位/营业部字段的候选才会标为 seat_candidate_found。'
+          ? '深度诊断：已优先使用 TRADE_ID 下钻过滤，只有包含席位/营业部字段的候选才会标为 seat_candidate_found。'
           : '轻量诊断：默认不展开 TRADE_ID 深度搜索，避免 Vercel 超时。若要找真正席位字段，请单票使用 deep=true。',
       });
     });
@@ -278,7 +277,7 @@ module.exports = async (req, res) => {
   } catch (err) {
     return json(res, 200, okBase({
       success: false,
-      mode: 'dragon_tiger_debug_v4',
+      mode: 'dragon_tiger_debug_v5',
       error: String(err && err.message ? err.message : err),
       symbols,
       results: [],
