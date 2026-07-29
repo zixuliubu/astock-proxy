@@ -61,3 +61,12 @@ test('quote reconciliation joins by stock code and keeps Chinese names', () => {
   assert.equal(rows[0].name, '立新能源');
   assert.equal(rows[0].price, 8.02);
 });
+
+test('sector flow sorts locally by the requested metric contract', async () => {
+  const values = [
+    { mainNetYi: -0.5 },
+    { mainNetYi: 1.2 },
+    { mainNetYi: 0.2 },
+  ].sort((left, right) => right.mainNetYi - left.mainNetYi);
+  assert.deepEqual(values.map(item => item.mainNetYi), [1.2, 0.2, -0.5]);
+});

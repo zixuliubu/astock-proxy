@@ -1,5 +1,6 @@
 const { json, setCors, parseSymbols, secid, buildUrl, requestJson, cached, okBase, wan, yi, num } = require('./_stock-utils');
 const { failure, summarizeCumulativeFlow } = require('./_data-contracts');
+const { sinaQuote, tencentQuote, mergeQuotes } = require('./quote');
 
 function parseFlowLine(line, mode) {
   const p = String(line || '').split(',');
@@ -48,16 +49,34 @@ async function fetchDailyFlow(code, limit = 20) {
 }
 
 async function fetchTurnover(code) {
-  const url = buildUrl('https://push2.eastmoney.com/api/qt/stock/get', {
-    secid: secid(code),
-    fields: 'f12,f14,f48',
-  });
-  const data = await requestJson(url, { headers: { Referer: 'https://quote.eastmoney.com/' }, timeoutMs: 8000 });
-  return num(data?.data?.f48);
+  try {
+    const url = buildUrl('https://push2.eastmoney.com/api/qt/stock/get', {
+      secid: secid(code),
+      fields: 'f12,f14,f48',
+    });
+    const data = await requestJson(url, { headers: { Referer: 'https://quote.eastmoney.com/' }, timeoutMs: 8000 });
+    const value = num(data?.data?.f48);
+    if (value !== null && value > 0) return { amountYuan: value, source: 'eastmoney_stock_f48' };
+  } catch (error) {
+    // Continue to the existing Sina/Tencent quote adapters.
+  }
+  const [sinaResult, tencentResult] = await Promise.allSettled([
+    sinaQuote(code),
+    tencentQuote(code),
+  ]);
+  const quote = mergeQuotes(
+    sinaResult.status === 'fulfilled' ? sinaResult.value : [],
+    tencentResult.status === 'fulfilled' ? tencentResult.value : [],
+  )[0];
+  const amount = num(quote?.amount);
+  return amount !== null && amount > 0
+    ? { amountYuan: amount, source: quote.sources?.join('+') || quote.source }
+    : { amountYuan: null, source: null };
 }
 
 async function fetchForCode(code, range, dailyLimit) {
-  const out = { code, turnoverYuan: await fetchTurnover(code).catch(() => null) };
+  const turnover = await fetchTurnover(code).catch(() => ({ amountYuan: null, source: null }));
+  const out = { code, turnoverYuan: turnover.amountYuan, turnoverSource: turnover.source };
   if (range === 'minute' || range === 'both') {
     const rows = await fetchMinuteFlow(code);
     out.minute = { summary: summarize(rows), rows: rows.slice(-30) };
@@ -67,7 +86,9 @@ async function fetchForCode(code, range, dailyLimit) {
     out.daily = { summary: summarize(rows), rows: rows.slice(-dailyLimit) };
   }
   const main = out.minute?.summary?.latest?.mainNetYuan ?? out.daily?.summary?.latest?.mainNetYuan;
-  if (num(main) !== null && out.turnoverYuan && Math.abs(main) > out.turnoverYuan * 1.05) {
+  if (out.minute && !(out.turnoverYuan > 0)) {
+    out.validation = failure('DATA_INSUFFICIENT', 'Current stock turnover is unavailable for flow reconciliation');
+  } else if (num(main) !== null && out.turnoverYuan && Math.abs(main) > out.turnoverYuan * 1.05) {
     out.validation = failure('CONFLICT', 'Main net flow exceeds the stock turnover', {
       mainNetYuan: main,
       turnoverYuan: out.turnoverYuan,

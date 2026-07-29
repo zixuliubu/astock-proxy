@@ -78,6 +78,8 @@ async function fetchFlow(kind = 'concept', top = 30, sort = 'mainNet') {
     else attempts.push({ kind: kinds[index], error: String(result.reason?.message || result.reason) });
   });
   const deduped = [...new Map(rows.map(row => [`${row.kind}:${row.bk}`, row])).values()];
+  const sortField = { mainNet: 'mainNetYi', changePct: 'changePct', amount: 'amountYi' }[sort] || 'mainNetYi';
+  deduped.sort((left, right) => Number(right[sortField] ?? -Infinity) - Number(left[sortField] ?? -Infinity));
   const validation = validateSectorRows(deduped);
   if (!validation.success) {
     return { success: false, data: deduped, attempts, validation };

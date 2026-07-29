@@ -56,7 +56,7 @@ async function sinaQuote(symbols) {
       changePct: prevClose ? Number(((price - prevClose) / prevClose * 100).toFixed(2)) : 0,
       volume: parseInt(fields[8], 10),
       amount: parseFloat(fields[9]),
-      time: `${fields[30]} ${fields[31]}`,
+      time: fields[30],
     });
   }
   return stocks;
