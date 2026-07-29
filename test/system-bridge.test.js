@@ -10,6 +10,7 @@ const {
   httpStatusFor,
   validateEnvelope,
 } = require('../api/_system-bridge');
+const { preserveSystemBridgeFailure } = require('../api/mcp');
 
 const NOW = new Date('2026-07-29T03:30:00.000Z');
 
@@ -108,4 +109,23 @@ test('protected HTTP endpoint reads exactly one exported Redis snapshot', async 
   assert.deepEqual(JSON.parse(calls[0].options.body), [
     'GET', 'ai-stock:bridge:v1:radar:latest',
   ]);
+});
+
+test('MCP preserves the bridge structured error instead of replacing status with HTTP code', () => {
+  const result = preserveSystemBridgeFailure('get_system_radar_latest', {
+    success: false,
+    status: 503,
+    error: 'Upstream returned HTTP 503',
+    data: {
+      success: false,
+      status: 'DATA_INSUFFICIENT',
+      error: { code: 'DATA_INSUFFICIENT', message: 'Snapshot missing' },
+      diagnostics: { kind: 'radar_latest' },
+    },
+    url: 'https://example.invalid/api/system-radar-latest?token=%5Bredacted%5D',
+  });
+  assert.equal(result.success, false);
+  assert.equal(result.status, 'DATA_INSUFFICIENT');
+  assert.equal(result.httpStatus, 503);
+  assert.equal(result.error.code, 'DATA_INSUFFICIENT');
 });
