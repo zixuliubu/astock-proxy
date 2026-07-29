@@ -229,6 +229,18 @@ function summarizeDragonTigerSeats(buySeats, sellSeats, yi, listRow = null) {
   };
 }
 
+function compactReviewSector(row) {
+  const value = row || {};
+  return {
+    name: value.name || value.sector || value.title || '',
+    changePct: value.changePct ?? value.zdf ?? value.涨跌幅 ?? null,
+    amount: value.amountYi ?? value.amount ?? value.成交额 ?? null,
+    mainNetYi: value.mainNetYi ?? null,
+    strength: value.strength ?? value.score ?? value.强度 ?? null,
+    raw: value,
+  };
+}
+
 module.exports = {
   REQUIRED_INDEX_CODES,
   TRADING_NODES,
@@ -244,4 +256,5 @@ module.exports = {
   validateReviewMinimum,
   selectDragonTigerSeats,
   summarizeDragonTigerSeats,
+  compactReviewSector,
 };
