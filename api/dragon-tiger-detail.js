@@ -1,8 +1,9 @@
 const { json, setCors, cleanCode, parseSymbols, requestJson, buildUrl, okBase, cached, yi } = require('./_stock-utils');
 const { tagSeat, summarizeSeats } = require('./_seat-tags');
+const { fetchSeat } = require('./dragon-tiger-seat-em');
 
 const EASTMONEY_DATA_URL = 'https://datacenter-web.eastmoney.com/api/data/v1/get';
-const LIST_REPORT = 'RPT_DAILYBILLBOARD_DETAILS';
+const LIST_REPORT = 'RPT_DAILYBILLBOARD_DETAILSNEW';
 
 const DETAIL_REPORTS = [
   'RPT_BILLBOARD_DAILYDETAILS',
@@ -57,11 +58,11 @@ function compactListRow(row) {
     tradeId: rowTradeId(row),
     close: n(pick(row, ['CLOSE_PRICE'], 0)),
     changePct: n(pick(row, ['CHANGE_RATE'], 0)),
-    buyAmount: n(pick(row, ['BUY_AMT', 'BILLBOARD_BUY_AMT'], 0)),
-    sellAmount: n(pick(row, ['SELL_AMT', 'BILLBOARD_SELL_AMT'], 0)),
+    buyAmount: n(pick(row, ['BILLBOARD_BUY_AMT', 'BUY_AMT'], 0)),
+    sellAmount: n(pick(row, ['BILLBOARD_SELL_AMT', 'SELL_AMT'], 0)),
     netAmount: n(pick(row, ['BILLBOARD_NET_AMT'], 0)),
     turnover: n(pick(row, ['TURNOVERRATE'], 0)),
-    amount: n(pick(row, ['AMOUNT', 'ACCUM_AMOUNT'], 0)),
+    amount: n(pick(row, ['BILLBOARD_DEAL_AMT', 'ACCUM_AMOUNT', 'AMOUNT'], 0)),
     buySeat: pick(row, ['BUY_SEAT', 'BUY_SEAT_NEW'], ''),
     sellSeat: pick(row, ['SELL_SEAT', 'SELL_SEAT_NEW'], ''),
   };
@@ -227,6 +228,34 @@ async function fetchDragonTigerDetail({ date, symbol, deep = false, maxReports =
     };
   }
 
+  try {
+    const verified = await fetchSeat({ date: tradeDate, symbol: code });
+    attempts.push(...(verified.attempts || []).map(item => ({ type: 'akshare_verified_seat', ...item })));
+    const seats = [...(verified.buySeats || []), ...(verified.sellSeats || [])];
+    if (seats.length) {
+      return {
+        success: true,
+        mode: 'dragon_tiger_detail_v6',
+        status: 'detail_ok',
+        source: 'eastmoney_datacenter_akshare_verified',
+        tradeDate,
+        code,
+        listRow: listCheck ? listCheck.listRow : null,
+        listRows: listCheck ? listCheck.listRows : [],
+        tradeIds: listCheck ? listCheck.tradeIds : [],
+        count: seats.length,
+        seats,
+        buySeats: verified.buySeats || [],
+        sellSeats: verified.sellSeats || [],
+        summary: verified.summary,
+        attempts,
+        note: 'Seat rows use Eastmoney BUY/SELL reports verified against AKShare; inferred seat tags are not official identity confirmation.',
+      };
+    }
+  } catch (err) {
+    attempts.push({ type: 'akshare_verified_seat', error: String(err && err.message ? err.message : err) });
+  }
+
   const filters = buildFilters(tradeDate, code, listCheck ? listCheck.tradeIds : []).slice(0, Math.max(3, Math.min(Number(maxFilters) || 18, 30)));
   const reports = DETAIL_REPORTS.slice(0, Math.max(1, Math.min(Number(maxReports) || 6, DETAIL_REPORTS.length)));
 
@@ -303,7 +332,7 @@ module.exports = async (req, res) => {
   const symbols = parseSymbols(req.query.symbols || req.query.symbol || req.query.code, 8);
   if (!symbols.length) return json(res, 400, { success: false, error: 'Missing symbol/symbols, e.g. ?date=20260709&symbol=002185' });
 
-  const deepRequested = req.query.deep === 'true' || req.query.full === 'true';
+  const deepRequested = req.query.deep !== 'false' && req.query.light !== 'true';
   const deep = deepRequested && symbols.length <= 2;
   const skippedDeepReason = deepRequested && !deep ? 'deep=true only runs for at most 2 symbols at a time to avoid Vercel timeout; retry with one symbol.' : undefined;
   const maxReports = Number(req.query.maxReports || 6);
@@ -317,8 +346,11 @@ module.exports = async (req, res) => {
       for (const symbol of symbols) {
         details.push(await fetchDragonTigerDetail({ date, symbol, deep, maxReports, maxFilters }));
       }
+      const bundleSuccess = details.every(item => item.success === true && item.status === 'detail_ok');
       return okBase({
-        mode: 'dragon_tiger_detail_bundle_v5',
+        success: bundleSuccess,
+        status: bundleSuccess ? 'OK' : 'DATA_INSUFFICIENT',
+        mode: 'dragon_tiger_detail_bundle_v6',
         count: details.length,
         symbols,
         date: formatDate(date),
@@ -331,10 +363,11 @@ module.exports = async (req, res) => {
           : '轻量模式：默认只确认是否上榜并返回 TRADE_ID，避免 Vercel 超时。单票 deep=true 才尝试席位营业部明细。',
       });
     });
-    return json(res, 200, { ...value, cacheHit });
+    return json(res, value.success === true ? 200 : 503, { ...value, cacheHit });
   } catch (err) {
-    return json(res, 200, okBase({
+    return json(res, 503, okBase({
       success: false,
+      status: 'UPSTREAM_FAILED',
       mode: 'dragon_tiger_detail_bundle_v5',
       error: String(err && err.message ? err.message : err),
       symbols,
