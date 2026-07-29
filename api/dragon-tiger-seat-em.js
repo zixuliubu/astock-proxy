@@ -161,6 +161,9 @@ module.exports = async (req, res) => {
     const { value, cached: cacheHit } = await cached(key, 300000, async () => fetchSeat({ date: req.query.date, symbol: symbols[0] }));
     return json(res, 200, { ...value, cacheHit });
   } catch (err) {
-    return json(res, 200, okBase({ success: false, mode: 'dragon_tiger_seat_em_v1', error: String(err && err.message ? err.message : err) }));
+    return json(res, 503, okBase({ success: false, status: 'UPSTREAM_FAILED', mode: 'dragon_tiger_seat_em_v1', error: String(err && err.message ? err.message : err) }));
   }
 };
+
+module.exports.fetchSeat = fetchSeat;
+module.exports.formatDate = formatDate;
