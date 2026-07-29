@@ -1,0 +1,91 @@
+name: Capture A-share Intraday Sessions
+
+on:
+  workflow_dispatch:
+    inputs:
+      session:
+        description: 'China trading session to capture.'
+        required: true
+        default: morning
+        type: choice
+        options:
+          - morning
+          - afternoon
+  schedule:
+    # Morning starts at 07:30 China time on the next UTC day (Sunday-Thursday).
+    # Afternoon starts at 11:30 China time on the same UTC day (Monday-Friday).
+    - cron: '30 23 * * 0-4'
+    - cron: '30 3 * * 1-5'
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - name: Capture session nodes
+        shell: bash
+        env:
+          CAPTURE_SECRET: ${{ secrets.CAPTURE_SECRET }}
+          INPUT_SESSION: ${{ github.event.inputs.session }}
+          SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          if [ -z "$CAPTURE_SECRET" ]; then
+            echo "CAPTURE_SECRET is not configured"
+            exit 1
+          fi
+
+          if [ -n "$INPUT_SESSION" ]; then
+            SESSION="$INPUT_SESSION"
+          else
+            case "$SCHEDULE" in
+              "30 23 * * 0-4") SESSION="morning" ;;
+              "30 3 * * 1-5") SESSION="afternoon" ;;
+              *) echo "Unable to resolve session"; exit 1 ;;
+            esac
+          fi
+
+          if [ "$SESSION" = "morning" ]; then
+            NODES=(09:15 09:20 09:25 09:35 09:45 09:55 10:05 10:15 10:25 10:35 10:45 10:55 11:05 11:15 11:25)
+          elif [ "$SESSION" = "afternoon" ]; then
+            NODES=(13:05 13:15 13:25 13:35 13:45 13:55 14:05 14:15 14:25 14:35 14:45 14:55 15:00)
+          else
+            echo "session must be morning or afternoon"
+            exit 1
+          fi
+
+          CHINA_DATE=$(TZ=Asia/Shanghai date +%Y%m%d)
+          MAX_ACCEPTABLE_LAG_SECONDS=540
+          FAILURES=0
+          echo "Capturing $SESSION session for China date $CHINA_DATE"
+
+          for NODE in "${NODES[@]}"; do
+            TARGET_EPOCH=$(TZ=Asia/Shanghai date -d "$CHINA_DATE $NODE:00" +%s)
+            NOW_EPOCH=$(date -u +%s)
+            WAIT_SECONDS=$((TARGET_EPOCH - NOW_EPOCH))
+
+            if [ "$WAIT_SECONDS" -gt 0 ]; then
+              echo "Waiting ${WAIT_SECONDS}s for China node $NODE"
+              sleep "$WAIT_SECONDS"
+            else
+              LAG_SECONDS=$((-WAIT_SECONDS))
+              if [ "$LAG_SECONDS" -gt "$MAX_ACCEPTABLE_LAG_SECONDS" ]; then
+                echo "Skipping stale node $NODE; job started ${LAG_SECONDS}s late"
+                FAILURES=$((FAILURES + 1))
+                continue
+              fi
+            fi
+
+            URL="https://astock-proxy.vercel.app/api/capture-node?node=$NODE&scheduledNode=$NODE&date=$CHINA_DATE"
+            echo "Capturing China node $NODE"
+            if ! curl -fsS --connect-timeout 10 --max-time 90 "$URL" \
+              -H "x-capture-token: $CAPTURE_SECRET" \
+              -H "Accept: application/json"; then
+              echo "Capture failed for China node $NODE"
+              FAILURES=$((FAILURES + 1))
+            fi
+          done
+
+          if [ "$FAILURES" -gt 0 ]; then
+            echo "$FAILURES session nodes were skipped or failed"
+            exit 1
+          fi
