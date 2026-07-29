@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       node:
-        description: 'Node label, for example 09:35, 09:45, 10:05, 13:05, 14:55, 15:00. Leave empty to infer from current UTC time.'
+        description: 'Scheduled China-time node, for example 09:15, 09:35 or 15:00. Leave empty to infer the latest elapsed node.'
         required: false
         type: string
       date:
@@ -12,56 +12,80 @@ on:
         required: false
         type: string
   schedule:
-    # China time, 10-minute snapshots during A-share trading windows:
-    # 09:35-11:25, 13:05-14:55, plus 15:00 close snapshot.
-    # GitHub Actions cron uses UTC and may be delayed by a few minutes.
-    - cron: '35,45,55 1 * * 1-5'
-    - cron: '5,15,25,35,45,55 2 * * 1-5'
-    - cron: '5,15,25 3 * * 1-5'
-    - cron: '5,15,25,35,45,55 5 * * 1-5'
-    - cron: '5,15,25,35,45,55 6 * * 1-5'
+    # Cron is UTC. The API stores the scheduled China-time label even when Actions starts late.
+    - cron: '15 1 * * 1-5'
+    - cron: '20 1 * * 1-5'
+    - cron: '25 1 * * 1-5'
+    - cron: '35 1 * * 1-5'
+    - cron: '45 1 * * 1-5'
+    - cron: '55 1 * * 1-5'
+    - cron: '5 2 * * 1-5'
+    - cron: '15 2 * * 1-5'
+    - cron: '25 2 * * 1-5'
+    - cron: '35 2 * * 1-5'
+    - cron: '45 2 * * 1-5'
+    - cron: '55 2 * * 1-5'
+    - cron: '5 3 * * 1-5'
+    - cron: '15 3 * * 1-5'
+    - cron: '25 3 * * 1-5'
+    - cron: '5 5 * * 1-5'
+    - cron: '15 5 * * 1-5'
+    - cron: '25 5 * * 1-5'
+    - cron: '35 5 * * 1-5'
+    - cron: '45 5 * * 1-5'
+    - cron: '55 5 * * 1-5'
+    - cron: '5 6 * * 1-5'
+    - cron: '15 6 * * 1-5'
+    - cron: '25 6 * * 1-5'
+    - cron: '35 6 * * 1-5'
+    - cron: '45 6 * * 1-5'
+    - cron: '55 6 * * 1-5'
     - cron: '0 7 * * 1-5'
 
 jobs:
   capture:
     runs-on: ubuntu-latest
     steps:
-      - name: Resolve node
+      - name: Resolve scheduled node
         id: node
         shell: bash
+        env:
+          INPUT_NODE: ${{ github.event.inputs.node }}
+          SCHEDULE: ${{ github.event.schedule }}
         run: |
-          INPUT_NODE="${{ github.event.inputs.node }}"
           if [ -n "$INPUT_NODE" ]; then
             NODE="$INPUT_NODE"
           else
-            UTC_HM=$(date -u +%H:%M)
-            case "$UTC_HM" in
-              01:35) NODE="09:35" ;;
-              01:45) NODE="09:45" ;;
-              01:55) NODE="09:55" ;;
-              02:05) NODE="10:05" ;;
-              02:15) NODE="10:15" ;;
-              02:25) NODE="10:25" ;;
-              02:35) NODE="10:35" ;;
-              02:45) NODE="10:45" ;;
-              02:55) NODE="10:55" ;;
-              03:05) NODE="11:05" ;;
-              03:15) NODE="11:15" ;;
-              03:25) NODE="11:25" ;;
-              05:05) NODE="13:05" ;;
-              05:15) NODE="13:15" ;;
-              05:25) NODE="13:25" ;;
-              05:35) NODE="13:35" ;;
-              05:45) NODE="13:45" ;;
-              05:55) NODE="13:55" ;;
-              06:05) NODE="14:05" ;;
-              06:15) NODE="14:15" ;;
-              06:25) NODE="14:25" ;;
-              06:35) NODE="14:35" ;;
-              06:45) NODE="14:45" ;;
-              06:55) NODE="14:55" ;;
-              07:00) NODE="15:00" ;;
-              *) NODE="$UTC_HM" ;;
+            case "$SCHEDULE" in
+              "15 1 * * 1-5") NODE="09:15" ;;
+              "20 1 * * 1-5") NODE="09:20" ;;
+              "25 1 * * 1-5") NODE="09:25" ;;
+              "35 1 * * 1-5") NODE="09:35" ;;
+              "45 1 * * 1-5") NODE="09:45" ;;
+              "55 1 * * 1-5") NODE="09:55" ;;
+              "5 2 * * 1-5") NODE="10:05" ;;
+              "15 2 * * 1-5") NODE="10:15" ;;
+              "25 2 * * 1-5") NODE="10:25" ;;
+              "35 2 * * 1-5") NODE="10:35" ;;
+              "45 2 * * 1-5") NODE="10:45" ;;
+              "55 2 * * 1-5") NODE="10:55" ;;
+              "5 3 * * 1-5") NODE="11:05" ;;
+              "15 3 * * 1-5") NODE="11:15" ;;
+              "25 3 * * 1-5") NODE="11:25" ;;
+              "5 5 * * 1-5") NODE="13:05" ;;
+              "15 5 * * 1-5") NODE="13:15" ;;
+              "25 5 * * 1-5") NODE="13:25" ;;
+              "35 5 * * 1-5") NODE="13:35" ;;
+              "45 5 * * 1-5") NODE="13:45" ;;
+              "55 5 * * 1-5") NODE="13:55" ;;
+              "5 6 * * 1-5") NODE="14:05" ;;
+              "15 6 * * 1-5") NODE="14:15" ;;
+              "25 6 * * 1-5") NODE="14:25" ;;
+              "35 6 * * 1-5") NODE="14:35" ;;
+              "45 6 * * 1-5") NODE="14:45" ;;
+              "55 6 * * 1-5") NODE="14:55" ;;
+              "0 7 * * 1-5") NODE="15:00" ;;
+              *) NODE="" ;;
             esac
           fi
           echo "node=$NODE" >> "$GITHUB_OUTPUT"
@@ -71,12 +95,20 @@ jobs:
         env:
           CAPTURE_SECRET: ${{ secrets.CAPTURE_SECRET }}
           INPUT_DATE: ${{ github.event.inputs.date }}
+          NODE: ${{ steps.node.outputs.node }}
         run: |
-          URL="https://astock-proxy.vercel.app/api/capture-node?node=${{ steps.node.outputs.node }}"
-          if [ -n "$INPUT_DATE" ]; then
-            URL="$URL&date=$INPUT_DATE"
+          URL="https://astock-proxy.vercel.app/api/capture-node"
+          if [ -n "$NODE" ]; then
+            URL="$URL?node=$NODE"
           fi
-          echo "Capturing node ${{ steps.node.outputs.node }}"
+          if [ -n "$INPUT_DATE" ]; then
+            if [[ "$URL" == *"?"* ]]; then
+              URL="$URL&date=$INPUT_DATE"
+            else
+              URL="$URL?date=$INPUT_DATE"
+            fi
+          fi
+          echo "Capturing scheduled China-time node ${NODE:-latest elapsed node}"
           curl -fsS "$URL" \
             -H "x-capture-token: $CAPTURE_SECRET" \
             -H "Accept: application/json"

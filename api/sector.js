@@ -1,41 +1,40 @@
-const https = require('https');
-
-function fetchJson(url, headers = {}) {
-  return new Promise((resolve, reject) => {
-    https.get(url, { headers, timeout: 8000 }, (res) => {
-      let data = '';
-      res.on('data', c => data += c);
-      res.on('end', () => {
-        try { resolve(JSON.parse(data.replace(/^jQuery\(/, '').replace(/\);?$/, ''))); }
-        catch (e) { reject(e); }
-      });
-      res.on('error', reject);
-    }).on('error', reject).on('timeout', function () {
-      this.destroy(); reject(new Error('timeout'));
-    });
-  });
-}
+const { fetchFlow } = require('./sector-money-flow');
+const { failure } = require('./_data-contracts');
 
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
-  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method === 'OPTIONS') return res.status(204).end();
+  if (req.method !== 'GET') return res.status(405).json(failure('METHOD_NOT_ALLOWED', 'Method not allowed'));
 
   try {
-    const data = await fetchJson(
-      'https://push2.hsmarketwg.eastmoney.com/api/qt/clist/hotboard/get?pn=1&pz=10&po=1&np=1&fltt=2&invt=2&fid=f3&fs=m%3A90%2Bt%3A2&fields=f12,f14,f2,f3,f5,f6&cb=jQuery',
-      { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://quote.eastmoney.com/' }
-    );
-    const sectors = (data?.data?.diff || []).map(s => ({
-      code: s.f12, name: s.f14, changePct: s.f3, price: s.f2,
-    }));
+    const result = await fetchFlow('both', 10, 'changePct');
+    if (!result.success) {
+      return res.status(503).json({
+        ...result.validation,
+        mode: 'hot_sectors_v3',
+        data: result.data,
+        diagnostics: { attempts: result.attempts },
+      });
+    }
+    const sectors = [...result.data]
+      .sort((a, b) => b.changePct - a.changePct)
+      .slice(0, 10);
     return res.status(200).json({
       success: true,
+      status: result.status,
+      mode: 'hot_sectors_v3',
+      source: result.source,
       count: sectors.length,
       data: sectors,
+      diagnostics: { attempts: result.attempts },
       updateTime: new Date().toISOString(),
     });
-  } catch (e) {
-    return res.status(500).json({ success: false, error: e.message });
+  } catch (err) {
+    return res.status(503).json({
+      ...failure('UPSTREAM_FAILED', String(err?.message || err)),
+      mode: 'hot_sectors_v3',
+      data: [],
+    });
   }
 };

@@ -1,3 +1,4 @@
+const { validateReviewMinimum } = require('./_data-contracts');
 const ASTOCK_BASE_URL = process.env.ASTOCK_BASE_URL || 'https://astock-proxy.vercel.app';
 const CAPTURE_SECRET = process.env.CAPTURE_SECRET;
 const CACHE_TTL_MS = Number(process.env.REVIEW_BUNDLE_CACHE_TTL_MS || 60 * 1000);
@@ -276,6 +277,10 @@ async function buildBundle(options) {
   compact.reviewHints = buildReviewHints(compact);
   compact.diagnostics = buildDiagnostics({ marketOverview, marketSentiment, lianbanLadder, limitUpPool, brokenLimitPool, limitDownPool, hotSectors, coreWatchlist, newsCatalysts, dragonTiger, intradayTimeline });
   compact.updateTime = new Date().toISOString();
+  const validation = validateReviewMinimum(compact);
+  compact.success = validation.success;
+  compact.status = validation.status;
+  compact.criticalFailures = validation.criticalFailures;
 
   if (includeRaw) {
     compact.raw = { marketOverview, marketSentiment, lianbanLadder, limitUpPool, brokenLimitPool, limitDownPool, hotSectors, coreWatchlist, newsCatalysts, dragonTiger, intradayTimeline };
@@ -298,7 +303,7 @@ module.exports = async (req, res) => {
   const now = Date.now();
   const cached = memoryCache.get(cacheKey);
   if (cached && now - cached.time < CACHE_TTL_MS) {
-    return json(res, 200, { success: true, cached: true, ...cached.value });
+    return json(res, cached.value.success ? 200 : 503, { cached: true, ...cached.value });
   }
 
   try {
@@ -308,7 +313,7 @@ module.exports = async (req, res) => {
       const oldest = memoryCache.keys().next().value;
       memoryCache.delete(oldest);
     }
-    return json(res, 200, { success: true, cached: false, ...value });
+    return json(res, value.success ? 200 : 503, { cached: false, ...value });
   } catch (e) {
     return json(res, 500, { success: false, error: e.message, date, updateTime: new Date().toISOString() });
   }

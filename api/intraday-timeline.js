@@ -1,7 +1,7 @@
 const REDIS_URL = process.env.UPSTASH_REDIS_REST_URL;
 const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
 const CAPTURE_SECRET = process.env.CAPTURE_SECRET;
-const DEFAULT_NODES = ['09:35', '09:45', '09:55', '10:05', '10:15', '10:25', '10:35', '10:45', '10:55', '11:05', '11:15', '11:25', '13:05', '13:15', '13:25', '13:35', '13:45', '13:55', '14:05', '14:15', '14:25', '14:35', '14:45', '14:55', '15:00'];
+const { TRADING_NODES, timelineCoverage, failure } = require('./_data-contracts');
 
 function json(res, status, body) {
   res.statusCode = status;
@@ -11,28 +11,19 @@ function json(res, status, body) {
 
 function chinaDate() {
   const parts = new Intl.DateTimeFormat('zh-CN', {
-    timeZone: 'Asia/Shanghai', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit',
-  }).formatToParts(new Date()).reduce((acc, p) => ({ ...acc, [p.type]: p.value }), {});
+    timeZone: 'Asia/Shanghai',
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date()).reduce((acc, part) => ({ ...acc, [part.type]: part.value }), {});
   return `${parts.year}${parts.month}${parts.day}`;
-}
-
-function nodeSortValue(node) {
-  const idx = DEFAULT_NODES.indexOf(node);
-  if (idx >= 0) return idx;
-  const [h, m] = String(node || '').split(':').map(Number);
-  if (Number.isFinite(h) && Number.isFinite(m)) return h * 60 + m;
-  return 9999;
 }
 
 function checkReadAuth(req) {
   if (!CAPTURE_SECRET) return { ok: false, status: 500, error: 'CAPTURE_SECRET is not configured' };
   const token = req.headers['x-capture-token'] || req.query?.token;
   if (token !== CAPTURE_SECRET) return { ok: false, status: 401, error: 'Unauthorized timeline request' };
-  return { ok: true };
-}
-
-function checkStorage() {
-  if (!REDIS_URL || !REDIS_TOKEN) return { ok: false, error: 'UPSTASH_REDIS_REST_URL or UPSTASH_REDIS_REST_TOKEN is not configured' };
   return { ok: true };
 }
 
@@ -47,104 +38,122 @@ async function redisCommand(command) {
   return data.result;
 }
 
-function getBrief(snapshot) {
-  return snapshot?.brief || {};
-}
-
-function num(v) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
+function num(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
 }
 
 function diffValue(current, previous) {
-  const a = num(current);
-  const b = num(previous);
-  if (a === null || b === null) return null;
-  return Number((a - b).toFixed(2));
+  const left = num(current);
+  const right = num(previous);
+  return left === null || right === null ? null : Number((left - right).toFixed(2));
 }
 
 function topSectorNames(brief) {
-  const arr = Array.isArray(brief.topSectors) ? brief.topSectors : [];
-  return arr.slice(0, 5).map(x => x.name || x.sector || x.板块 || x.title || '').filter(Boolean);
+  const rows = Array.isArray(brief?.topSectors) ? brief.topSectors : [];
+  return rows.slice(0, 5).map(item => item.name || item.sector || item.板块 || item.title || '').filter(Boolean);
 }
 
 function buildChanges(timeline) {
-  const rows = [];
-  for (let i = 0; i < timeline.length; i += 1) {
-    const cur = getBrief(timeline[i]);
-    const prev = i > 0 ? getBrief(timeline[i - 1]) : null;
-    rows.push({
-      node: timeline[i].node,
-      chinaTime: timeline[i].chinaTime,
-      marketLabel: cur.marketLabel || '待确认',
-      turnoverYi: cur.turnoverYi ?? null,
-      limitUp: cur.limitUp ?? null,
-      limitDown: cur.limitDown ?? null,
-      brokenCount: cur.brokenCount ?? null,
-      maxBoard: cur.maxBoard ?? null,
-      boardDistribution: cur.boardDistribution || null,
-      topSectors: topSectorNames(cur),
-      delta: prev ? {
-        turnoverYi: diffValue(cur.turnoverYi, prev.turnoverYi),
-        limitUp: diffValue(cur.limitUp, prev.limitUp),
-        limitDown: diffValue(cur.limitDown, prev.limitDown),
-        brokenCount: diffValue(cur.brokenCount, prev.brokenCount),
-        maxBoard: diffValue(cur.maxBoard, prev.maxBoard),
+  return timeline.map((snapshot, index) => {
+    const current = snapshot?.brief || {};
+    const previous = index > 0 ? timeline[index - 1]?.brief || {} : null;
+    return {
+      node: snapshot.node,
+      chinaTime: snapshot.chinaTime,
+      capturedAt: snapshot.capturedAt,
+      marketLabel: current.marketLabel || '待确认',
+      turnoverYi: current.turnoverYi ?? null,
+      limitUp: current.limitUp ?? null,
+      limitDown: current.limitDown ?? null,
+      brokenCount: current.brokenCount ?? null,
+      maxBoard: current.maxBoard ?? null,
+      boardDistribution: current.boardDistribution || null,
+      topSectors: topSectorNames(current),
+      componentStatus: snapshot.componentStatus || null,
+      delta: previous ? {
+        turnoverYi: diffValue(current.turnoverYi, previous.turnoverYi),
+        limitUp: diffValue(current.limitUp, previous.limitUp),
+        limitDown: diffValue(current.limitDown, previous.limitDown),
+        brokenCount: diffValue(current.brokenCount, previous.brokenCount),
+        maxBoard: diffValue(current.maxBoard, previous.maxBoard),
       } : null,
-    });
-  }
-  return rows;
+    };
+  });
 }
 
-function buildConclusion(changes) {
-  if (!changes.length) return '暂无节点快照，先手动调用 capture-node 或等待 GitHub Actions 定时采样。';
+function buildConclusion(changes, coverage) {
+  if (!changes.length) return '暂无有效节点快照。';
   const first = changes[0];
-  const last = changes[changes.length - 1];
-  const limitUpDelta = diffValue(last.limitUp, first.limitUp);
-  const brokenDelta = diffValue(last.brokenCount, first.brokenCount);
-  const turnoverDelta = diffValue(last.turnoverYi, first.turnoverYi);
-  const parts = [];
-  parts.push(`已保存 ${changes.length} 个节点，首节点 ${first.node}，末节点 ${last.node}。`);
-  if (limitUpDelta !== null) parts.push(`涨停数较首节点变化 ${limitUpDelta}。`);
-  if (brokenDelta !== null) parts.push(`炸板数较首节点变化 ${brokenDelta}。`);
-  if (turnoverDelta !== null) parts.push(`成交额较首节点变化约 ${turnoverDelta} 亿。`);
-  if (last.maxBoard !== null) parts.push(`末节点最高板为 ${last.maxBoard} 板。`);
+  const last = changes.at(-1);
+  const parts = [`有效节点 ${changes.length} 个，首节点 ${first.node}，末节点 ${last.node}。`];
+  if (coverage.missingNodes.length) parts.push(`缺失节点：${coverage.missingNodes.join('、')}。`);
+  if (coverage.invalidStoredNodes.length) parts.push(`已隔离非法节点：${coverage.invalidStoredNodes.join('、')}。`);
   return parts.join('');
+}
+
+function incompleteComponents(timeline) {
+  const critical = ['marketOverview', 'marketSentiment', 'lianbanLadder', 'hotSectors'];
+  return timeline.flatMap(snapshot => critical
+    .filter(name => snapshot?.data?.[name]?.success === false || snapshot?.componentStatus?.[name] === 'failed')
+    .map(name => ({ node: snapshot.node, component: name })));
 }
 
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
   if (req.method === 'OPTIONS') return res.status(204).end();
-  if (req.method !== 'GET') return json(res, 405, { success: false, error: 'Method not allowed' });
+  if (req.method !== 'GET') return json(res, 405, failure('METHOD_NOT_ALLOWED', 'Method not allowed'));
 
   const auth = checkReadAuth(req);
-  if (!auth.ok) return json(res, auth.status, { success: false, error: auth.error });
-  const storage = checkStorage();
-  if (!storage.ok) return json(res, 500, { success: false, error: storage.error });
+  if (!auth.ok) return json(res, auth.status, failure('UNAUTHORIZED', auth.error));
+  if (!REDIS_URL || !REDIS_TOKEN) {
+    return json(res, 500, failure('CONFIG_ERROR', 'Upstash Redis is not configured'));
+  }
 
   const date = String(req.query.date || chinaDate()).replace(/-/g, '');
   const key = `astock:intraday:${date}`;
-
   try {
     const raw = await redisCommand(['GET', key]);
     const timeline = raw ? JSON.parse(raw) : [];
-    const sorted = Array.isArray(timeline)
-      ? timeline.sort((a, b) => nodeSortValue(a.node) - nodeSortValue(b.node))
-      : [];
-    const changes = buildChanges(sorted);
-    return json(res, 200, {
-      success: true,
+    const coverage = timelineCoverage(timeline, date);
+    const changes = buildChanges(coverage.sorted);
+    const incomplete = incompleteComponents(coverage.sorted);
+    const complete = coverage.complete && incomplete.length === 0;
+    const response = {
+      success: complete,
+      status: complete ? 'OK' : 'DATA_INSUFFICIENT',
       date,
       key,
-      count: sorted.length,
-      nodes: sorted.map(x => x.node),
+      timeZone: 'Asia/Shanghai',
+      scheduledNodes: TRADING_NODES,
+      expectedNodes: coverage.expectedNodes,
+      actualCapturedNodes: coverage.actualCapturedNodes,
+      actualCaptureTimes: coverage.sorted.map(item => ({
+        node: item.node,
+        chinaTime: item.chinaTime,
+        capturedAt: item.capturedAt,
+      })),
+      missingNodes: coverage.missingNodes,
+      missingReasons: coverage.missingNodes.map(node => ({
+        node,
+        reason: 'No valid snapshot was stored for the scheduled China-time node',
+      })),
+      invalidStoredNodes: coverage.invalidStoredNodes,
+      incompleteComponents: incomplete,
+      duplicatePolicy: 'same scheduled node replaces the prior snapshot; replacement is reported by capture-node',
+      overwrittenNodes: coverage.overwrittenNodes,
+      count: coverage.sorted.length,
+      nodes: coverage.actualCapturedNodes,
       changes,
-      conclusion: buildConclusion(changes),
-      rawTimeline: req.query.raw === 'true' ? sorted : undefined,
+      conclusion: buildConclusion(changes, coverage),
+      rawTimeline: req.query.raw === 'true' ? coverage.sorted : undefined,
       updateTime: new Date().toISOString(),
-    });
-  } catch (e) {
-    return json(res, 500, { success: false, error: e.message, key, date });
+    };
+    return json(res, complete ? 200 : 503, response);
+  } catch (error) {
+    return json(res, 500, failure('UPSTREAM_FAILED', error.message, { key, date }));
   }
 };
+
+module.exports.buildChanges = buildChanges;
