@@ -67,6 +67,32 @@ function stripHtml(text) {
   return String(text || '').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim();
 }
 
+function isUsableText(value) {
+  const text = String(value || '').trim();
+  return Boolean(text) && !text.includes('\uFFFD');
+}
+
+function reconcileTextRows(primaryRows, fallbackRows, fields = ['name', 'industry', 'reason']) {
+  const fallbackByCode = new Map(
+    (Array.isArray(fallbackRows) ? fallbackRows : [])
+      .map(row => [cleanCode(row?.code), row])
+      .filter(([code]) => code),
+  );
+  return (Array.isArray(primaryRows) ? primaryRows : []).map(row => {
+    const fallback = fallbackByCode.get(cleanCode(row?.code)) || {};
+    const next = { ...row };
+    const textFallbackFields = [];
+    for (const field of fields) {
+      if (!isUsableText(next[field]) && isUsableText(fallback[field])) {
+        next[field] = fallback[field];
+        textFallbackFields.push(field);
+      }
+    }
+    if (textFallbackFields.length) next.textFallbackFields = textFallbackFields;
+    return next;
+  });
+}
+
 function parseMaybeJsonp(text) {
   const s = String(text || '').trim();
   try { return JSON.parse(s); } catch (e) {}
@@ -134,6 +160,8 @@ module.exports = {
   wan,
   yi,
   stripHtml,
+  isUsableText,
+  reconcileTextRows,
   parseMaybeJsonp,
   requestText,
   requestJson,

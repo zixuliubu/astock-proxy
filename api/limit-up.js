@@ -1,4 +1,5 @@
 const https = require('https');
+const { reconcileTextRows } = require('./_stock-utils');
 
 function fetchJson(url, headers = {}) {
   return new Promise((resolve, reject) => {
@@ -76,9 +77,10 @@ module.exports = async (req, res) => {
       push2exLimitUp(date).catch(() => null),
       emLimitUp().catch(() => null),
     ]);
+    const reconciledXgb = xgb ? reconcileTextRows(xgb, push || []) : null;
     return res.status(200).json({
       success: true,
-      xuangubao: xgb ? { count: xgb.length, data: xgb.slice(0, 50) } : null,
+      xuangubao: reconciledXgb ? { count: reconciledXgb.length, data: reconciledXgb.slice(0, 50) } : null,
       push2ex: push ? { count: push.length, data: push.slice(0, 50) } : null,
       eastmoney: em ? { count: em.length, data: em.slice(0, 50) } : null,
       updateTime: new Date().toISOString(),

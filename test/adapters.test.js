@@ -4,6 +4,8 @@ const stockFlow = require('../api/stock-capital-flow');
 const sectorFlow = require('../api/sector-money-flow');
 const dragonTiger = require('../api/dragon-tiger');
 const quote = require('../api/quote');
+const watchlist = require('../api/watchlist');
+const { reconcileTextRows } = require('../api/_stock-utils');
 
 test('stock-capital-flow parser preserves Eastmoney yuan fields', () => {
   const row = stockFlow.parseFlowLine('14:55,120000000,-1,2,50000000,70000000', 'minute');
@@ -69,4 +71,33 @@ test('sector flow sorts locally by the requested metric contract', async () => {
     { mainNetYi: 0.2 },
   ].sort((left, right) => right.mainNetYi - left.mainNetYi);
   assert.deepEqual(values.map(item => item.mainNetYi), [1.2, 0.2, -0.5]);
+});
+
+test('watchlist reuses decoded quote rows instead of parsing Sina as UTF-8', () => {
+  const row = watchlist.toWatchRow({
+    sources: ['sina', 'tencent'],
+    code: '600584',
+    name: '长电科技',
+    open: 75,
+    prevClose: 76,
+    price: 77,
+    high: 78,
+    low: 74,
+    volume: 100,
+    amount: 100000000,
+    time: '20260729111500',
+  });
+  assert.equal(row.name, '长电科技');
+  assert.equal(row.code, 'sh600584');
+  assert.equal(row.source, 'sina+tencent');
+});
+
+test('text reconciler replaces only corrupted upstream text with valid fallback', () => {
+  const rows = reconcileTextRows(
+    [{ code: '600693.SS', name: '东百���团', industry: '大消费' }],
+    [{ code: '600693', name: '东百集团', industry: '零售' }],
+  );
+  assert.equal(rows[0].name, '东百集团');
+  assert.equal(rows[0].industry, '大消费');
+  assert.deepEqual(rows[0].textFallbackFields, ['name']);
 });
