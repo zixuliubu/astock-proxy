@@ -1,4 +1,5 @@
-const https = require('https');
+const quote = require('./quote');
+const { failure } = require('./_data-contracts');
 
 const DEFAULT_GROUPS = {
   default: ['sh600584', 'sz002185', 'sz002407', 'sh600793'],
@@ -11,19 +12,6 @@ const DEFAULT_GROUPS = {
   market_core: ['sh600519', 'sh601318', 'sh600036', 'sh601398', 'sh600030', 'sz300750'],
 };
 
-function fetchText(url, headers = {}) {
-  return new Promise((resolve, reject) => {
-    https.get(url, { headers, timeout: 8000 }, (res) => {
-      let data = '';
-      res.on('data', c => data += c);
-      res.on('end', () => resolve(data));
-      res.on('error', reject);
-    }).on('error', reject).on('timeout', function () {
-      this.destroy(); reject(new Error('timeout'));
-    });
-  });
-}
-
 function normalizeSymbol(code) {
   let s = String(code || '').trim().toLowerCase();
   if (!s) return '';
@@ -34,17 +22,14 @@ function normalizeSymbol(code) {
   return s;
 }
 
-function parseSinaLine(symbol, rawLine) {
-  const match = rawLine.match(/="(.*)"/);
-  const parts = match ? match[1].split(',') : [];
-  if (parts.length < 32 || !parts[0]) return null;
-  const open = Number(parts[1]);
-  const prevClose = Number(parts[2]);
-  const price = Number(parts[3]);
-  const high = Number(parts[4]);
-  const low = Number(parts[5]);
-  const volume = Number(parts[8]);
-  const amount = Number(parts[9]);
+function toWatchRow(row) {
+  const open = Number(row.open);
+  const prevClose = Number(row.prevClose);
+  const price = Number(row.price);
+  const high = Number(row.high);
+  const low = Number(row.low);
+  const volume = Number(row.volume);
+  const amount = Number(row.amount);
   const change = Number((price - prevClose).toFixed(3));
   const changePct = prevClose ? Number(((price - prevClose) / prevClose * 100).toFixed(2)) : 0;
   const range = high - low;
@@ -54,9 +39,10 @@ function parseSinaLine(symbol, rawLine) {
   else if (closePosition !== null && closePosition >= 0.45) support = '承接一般';
   else if (closePosition !== null && closePosition < 0.35) support = '承接偏弱';
   return {
-    source: 'sina',
-    code: symbol,
-    name: parts[0],
+    source: Array.isArray(row.sources) ? row.sources.join('+') : row.source,
+    sources: row.sources || [row.source].filter(Boolean),
+    code: normalizeSymbol(row.code),
+    name: row.name,
     price,
     prevClose,
     open,
@@ -69,20 +55,26 @@ function parseSinaLine(symbol, rawLine) {
     amountYi: Number((amount / 100000000).toFixed(2)),
     closePosition,
     support,
-    time: `${parts[30]} ${parts[31]}`,
+    time: row.time,
   };
 }
 
-async function fetchSinaQuotes(symbols) {
+async function fetchWatchlistQuotes(symbols) {
   const list = symbols.map(normalizeSymbol).filter(Boolean);
-  if (!list.length) return [];
-  const raw = await fetchText(`https://hq.sinajs.cn/list=${list.join(',')}`, {
-    'User-Agent': 'Mozilla/5.0',
-    'Referer': 'https://finance.sina.com.cn/',
-  });
-  return raw.split('\n')
-    .map((line, idx) => parseSinaLine(list[idx], line))
-    .filter(Boolean);
+  if (!list.length) return { data: [], sources: { sina: 'empty', tencent: 'empty' } };
+  const [sinaResult, tencentResult] = await Promise.allSettled([
+    quote.sinaQuote(list.join(',')),
+    quote.tencentQuote(list.join(',')),
+  ]);
+  const sina = sinaResult.status === 'fulfilled' ? sinaResult.value : [];
+  const tencent = tencentResult.status === 'fulfilled' ? tencentResult.value : [];
+  return {
+    data: quote.mergeQuotes(sina, tencent).map(toWatchRow),
+    sources: {
+      sina: sina.length ? 'ok' : sinaResult.status === 'fulfilled' ? 'empty' : 'failed',
+      tencent: tencent.length ? 'ok' : tencentResult.status === 'fulfilled' ? 'empty' : 'failed',
+    },
+  };
 }
 
 module.exports = async (req, res) => {
@@ -95,13 +87,21 @@ module.exports = async (req, res) => {
     const symbols = req.query.symbols
       ? String(req.query.symbols).split(',').map(s => s.trim()).filter(Boolean)
       : (DEFAULT_GROUPS[group] || DEFAULT_GROUPS.default);
-    const data = await fetchSinaQuotes(symbols);
+    const result = await fetchWatchlistQuotes(symbols);
+    const data = result.data;
+    if (!data.length) {
+      return res.status(503).json(failure('DATA_INSUFFICIENT', 'Watchlist quote sources returned no usable rows', {
+        sources: result.sources,
+      }));
+    }
     const sorted = [...data].sort((a, b) => (b.amount || 0) - (a.amount || 0));
     return res.status(200).json({
       success: true,
+      status: 'OK',
       group,
       symbols: symbols.map(normalizeSymbol),
       count: data.length,
+      sources: result.sources,
       data: sorted,
       summary: {
         strongestSupport: sorted.filter(x => x.support === '承接较强').slice(0, 5),
@@ -111,6 +111,9 @@ module.exports = async (req, res) => {
       updateTime: new Date().toISOString(),
     });
   } catch (e) {
-    return res.status(500).json({ success: false, error: e.message });
+    return res.status(502).json(failure('UPSTREAM_FAILED', e.message));
   }
 };
+
+module.exports.toWatchRow = toWatchRow;
+module.exports.fetchWatchlistQuotes = fetchWatchlistQuotes;
