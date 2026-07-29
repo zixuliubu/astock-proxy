@@ -3,8 +3,7 @@ const REDIS_URL = process.env.UPSTASH_REDIS_REST_URL;
 const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
 const CAPTURE_SECRET = process.env.CAPTURE_SECRET;
 const NODE_TTL_SECONDS = Number(process.env.NODE_TTL_SECONDS || 60 * 60 * 24 * 30);
-
-const DEFAULT_NODES = ['09:35', '09:45', '09:55', '10:05', '10:15', '10:25', '10:35', '10:45', '10:55', '11:05', '11:15', '11:25', '13:05', '13:15', '13:25', '13:35', '13:45', '13:55', '14:05', '14:15', '14:25', '14:35', '14:45', '14:55', '15:00'];
+const { TRADING_NODES, normalizeNode, failure } = require('./_data-contracts');
 
 function json(res, status, body) {
   res.statusCode = status;
@@ -22,10 +21,9 @@ function chinaParts() {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
-  }).formatToParts(new Date()).reduce((acc, p) => ({ ...acc, [p.type]: p.value }), {});
+  }).formatToParts(new Date()).reduce((acc, part) => ({ ...acc, [part.type]: part.value }), {});
   return {
     date: `${parts.year}${parts.month}${parts.day}`,
-    dateText: `${parts.year}-${parts.month}-${parts.day}`,
     time: `${parts.hour}:${parts.minute}:${parts.second}`,
     isoLike: `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`,
   };
@@ -33,32 +31,17 @@ function chinaParts() {
 
 function nearestNode(hhmmss) {
   const hhmm = String(hhmmss || '').slice(0, 5);
-  let current = DEFAULT_NODES[0];
-  for (const n of DEFAULT_NODES) {
-    if (hhmm >= n) current = n;
+  let current = null;
+  for (const node of TRADING_NODES) {
+    if (hhmm >= node) current = node;
   }
   return current;
-}
-
-function nodeSortValue(node) {
-  const idx = DEFAULT_NODES.indexOf(node);
-  if (idx >= 0) return idx;
-  const [h, m] = String(node || '').split(':').map(Number);
-  if (Number.isFinite(h) && Number.isFinite(m)) return h * 60 + m;
-  return 9999;
 }
 
 function checkAuth(req) {
   if (!CAPTURE_SECRET) return { ok: false, status: 500, error: 'CAPTURE_SECRET is not configured' };
   const token = req.headers['x-capture-token'] || req.query?.token;
   if (token !== CAPTURE_SECRET) return { ok: false, status: 401, error: 'Unauthorized capture request' };
-  return { ok: true };
-}
-
-function checkStorage() {
-  if (!REDIS_URL || !REDIS_TOKEN) {
-    return { ok: false, error: 'UPSTASH_REDIS_REST_URL or UPSTASH_REDIS_REST_TOKEN is not configured' };
-  }
   return { ok: true };
 }
 
@@ -72,9 +55,7 @@ async function redisCommand(command) {
     body: JSON.stringify(command),
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok || data.error) {
-    throw new Error(data.error || `Redis HTTP ${response.status}`);
-  }
+  if (!response.ok || data.error) throw new Error(data.error || `Redis HTTP ${response.status}`);
   return data.result;
 }
 
@@ -86,14 +67,24 @@ async function fetchJson(path, query = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15000);
   try {
-    const response = await fetch(url.toString(), { headers: { Accept: 'application/json' }, signal: controller.signal });
+    const response = await fetch(url.toString(), {
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    });
     const text = await response.text();
     let data;
-    try { data = JSON.parse(text); } catch (err) { data = { raw: text }; }
+    try {
+      data = JSON.parse(text);
+    } catch (error) {
+      data = { raw: text };
+    }
     if (!response.ok) return { success: false, status: response.status, error: `HTTP ${response.status}`, data };
     return data;
-  } catch (err) {
-    return { success: false, error: err.name === 'AbortError' ? 'timeout' : String(err.message || err) };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.name === 'AbortError' ? 'timeout' : String(error.message || error),
+    };
   } finally {
     clearTimeout(timeout);
   }
@@ -123,7 +114,11 @@ function brief(snapshot) {
 }
 
 async function collectSnapshot(node, date) {
-  const [marketOverview, marketSentiment, lianbanLadder, limitUpPool, brokenLimitPool, limitDownPool, hotSectors, watchlist, newsCatalysts] = await Promise.all([
+  const names = [
+    'marketOverview', 'marketSentiment', 'lianbanLadder', 'limitUpPool',
+    'brokenLimitPool', 'limitDownPool', 'hotSectors', 'watchlist', 'newsCatalysts',
+  ];
+  const results = await Promise.all([
     fetchJson('/api/market-overview'),
     fetchJson('/api/sentiment'),
     fetchJson('/api/lianban-ladder', { date }),
@@ -134,25 +129,20 @@ async function collectSnapshot(node, date) {
     fetchJson('/api/watchlist', { group: 'default' }),
     fetchJson('/api/news-catalysts'),
   ]);
-
+  const data = Object.fromEntries(names.map((name, index) => [name, results[index]]));
   const cp = chinaParts();
   const snapshot = {
     node,
+    scheduledChinaTime: node,
     date,
     chinaTime: cp.isoLike,
     capturedAt: new Date().toISOString(),
     source: 'capture-node',
-    data: {
-      marketOverview,
-      marketSentiment,
-      lianbanLadder,
-      limitUpPool,
-      brokenLimitPool,
-      limitDownPool,
-      hotSectors,
-      watchlist,
-      newsCatalysts,
-    },
+    componentStatus: Object.fromEntries(names.map(name => [
+      name,
+      data[name]?.success === false ? data[name]?.status || 'failed' : 'ok',
+    ])),
+    data,
   };
   snapshot.brief = brief(snapshot);
   return snapshot;
@@ -162,41 +152,68 @@ module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
   if (req.method === 'OPTIONS') return res.status(204).end();
-  if (req.method !== 'GET') return json(res, 405, { success: false, error: 'Method not allowed' });
+  if (req.method !== 'GET') return json(res, 405, failure('METHOD_NOT_ALLOWED', 'Method not allowed'));
 
   const auth = checkAuth(req);
-  if (!auth.ok) return json(res, auth.status, { success: false, error: auth.error });
-  const storage = checkStorage();
-  if (!storage.ok) return json(res, 500, { success: false, error: storage.error });
+  if (!auth.ok) return json(res, auth.status, failure('UNAUTHORIZED', auth.error));
+  if (!REDIS_URL || !REDIS_TOKEN) {
+    return json(res, 500, failure('CONFIG_ERROR', 'Upstash Redis is not configured'));
+  }
 
   const cp = chinaParts();
   const date = String(req.query.date || cp.date).replace(/-/g, '');
-  const node = String(req.query.node || nearestNode(cp.time));
+  const requestedNode = req.query.node ? normalizeNode(req.query.node) : nearestNode(cp.time);
+  if (!requestedNode) {
+    return json(res, 400, failure('INVALID_ARGUMENT', 'node must be a scheduled Asia/Shanghai trading node', {
+      requestedNode: req.query.node || null,
+      scheduledNodes: TRADING_NODES,
+      chinaTime: cp.isoLike,
+    }));
+  }
   const key = `astock:intraday:${date}`;
 
   try {
-    const snapshot = await collectSnapshot(node, date);
+    const snapshot = await collectSnapshot(requestedNode, date);
     const existingRaw = await redisCommand(['GET', key]);
     let timeline = [];
     if (existingRaw) {
-      try { timeline = JSON.parse(existingRaw); } catch (err) { timeline = []; }
+      try {
+        timeline = JSON.parse(existingRaw);
+      } catch (error) {
+        timeline = [];
+      }
     }
-    const withoutSameNode = timeline.filter(item => item.node !== node);
-    const nextTimeline = [...withoutSameNode, snapshot].sort((a, b) => nodeSortValue(a.node) - nodeSortValue(b.node));
+    const replacedNode = timeline.some(item => item.node === requestedNode);
+    const nextTimeline = [
+      ...timeline.filter(item => item.node !== requestedNode),
+      snapshot,
+    ].sort((left, right) => TRADING_NODES.indexOf(left.node) - TRADING_NODES.indexOf(right.node));
     await redisCommand(['SET', key, JSON.stringify(nextTimeline)]);
     await redisCommand(['EXPIRE', key, String(NODE_TTL_SECONDS)]);
 
-    return json(res, 200, {
-      success: true,
+    const criticalFailures = ['marketOverview', 'marketSentiment', 'lianbanLadder', 'hotSectors']
+      .filter(name => snapshot.componentStatus[name] !== 'ok');
+    const success = criticalFailures.length === 0;
+    return json(res, success ? 200 : 503, {
+      success,
+      status: success ? 'OK' : 'DATA_INSUFFICIENT',
       mode: 'saved_intraday_node_snapshot',
       key,
       date,
-      node,
+      node: requestedNode,
+      timeZone: 'Asia/Shanghai',
+      actualChinaTime: snapshot.chinaTime,
+      replacedNode,
+      duplicatePolicy: 'replace the snapshot for the same scheduled node',
       savedCount: nextTimeline.length,
+      criticalFailures,
+      componentStatus: snapshot.componentStatus,
       brief: snapshot.brief,
       updateTime: new Date().toISOString(),
     });
-  } catch (e) {
-    return json(res, 500, { success: false, error: e.message, key, date, node });
+  } catch (error) {
+    return json(res, 500, failure('UPSTREAM_FAILED', error.message, { key, date, node: requestedNode }));
   }
 };
+
+module.exports.nearestNode = nearestNode;

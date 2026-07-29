@@ -1,6 +1,19 @@
 const { json, setCors, buildUrl, requestJson, cached, okBase, num, yi } = require('./_stock-utils');
+const { failure, validateSectorRows } = require('./_data-contracts');
+
+const EASTMONEY_TOKEN = 'b2884a393a59ad64002292a3e90d46a5';
+const FLOW_FIELDS = 'f12,f14,f2,f3,f6,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87,f204,f205,f124';
+
+function missingFields(row) {
+  return [
+    ['changePct', 'f3'],
+    ['amountYi', 'f6'],
+    ['mainNetYi', 'f62'],
+  ].filter(([, raw]) => num(row?.[raw]) === null).map(([field]) => field);
+}
 
 function normalize(row, sourceKind, source) {
+  const missing = missingFields(row);
   return {
     bk: row.f12 || '',
     name: row.f14 || '',
@@ -14,13 +27,9 @@ function normalize(row, sourceKind, source) {
     midNetYi: yi(row.f78),
     smallNetYi: yi(row.f84),
     mainNetRatio: num(row.f184),
+    missingFields: missing,
+    missingReason: missing.length ? `upstream fields unavailable: ${missing.join(',')}` : '',
   };
-}
-
-function fsFor(kind) {
-  if (kind === 'industry') return 'm:90+t:2';
-  if (kind === 'both') return 'm:90+t:2,m:90+t:3';
-  return 'm:90+t:3';
 }
 
 function parseDiff(data) {
@@ -29,101 +38,84 @@ function parseDiff(data) {
   return Array.isArray(diff) ? diff : [];
 }
 
-async function requestBoardClist(host, params, label) {
-  const url = buildUrl(`${host}/api/qt/clist/get`, params);
-  const data = await requestJson(url, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0',
-      Referer: 'https://quote.eastmoney.com/',
-      Origin: 'https://quote.eastmoney.com',
-    },
+function sectorType(kind) {
+  return kind === 'industry' ? '2' : '3';
+}
+
+async function fetchOneKind(kind, top, sort) {
+  const fid = { mainNet: 'f62', changePct: 'f3', amount: 'f6' }[sort] || 'f62';
+  const url = buildUrl('https://push2.eastmoney.com/api/qt/clist/get', {
+    pn: 1,
+    pz: top,
+    po: 1,
+    np: 1,
+    ut: EASTMONEY_TOKEN,
+    fltt: 2,
+    invt: 2,
+    fid0: fid,
+    fs: `m:90 t:${sectorType(kind)}`,
+    stat: 1,
+    fields: FLOW_FIELDS,
+    rt: 52975239,
+    _: Date.now(),
+  });
+  const payload = await requestJson(url, {
+    headers: { Referer: 'https://data.eastmoney.com/bkzj/', Origin: 'https://data.eastmoney.com' },
     timeoutMs: 12000,
   });
-  const rows = parseDiff(data);
-  if (!rows.length) throw new Error(`${label} empty`);
-  return rows;
+  const rows = parseDiff(payload);
+  if (!rows.length) throw new Error(`${kind} board flow returned no rows`);
+  return rows.map(row => normalize(row, kind, 'eastmoney_push2_akshare_contract'));
 }
 
 async function fetchFlow(kind = 'concept', top = 30, sort = 'mainNet') {
-  const fidMap = { mainNet: 'f62', changePct: 'f3', amount: 'f6' };
-  const fid = fidMap[sort] || 'f62';
-  const pz = Math.min(Math.max(Number(top || 30), 1), 60);
-  const baseParams = {
-    pn: 1,
-    pz,
-    po: 1,
-    np: 1,
-    fltt: 2,
-    invt: 2,
-    fid,
-    fs: fsFor(kind),
-    fields: 'f12,f14,f3,f6,f62,f66,f72,f78,f84,f184',
-  };
-
+  const kinds = kind === 'both' ? ['industry', 'concept'] : [kind];
+  const settled = await Promise.allSettled(kinds.map(item => fetchOneKind(item, top, sort)));
   const attempts = [];
-  const candidates = [
-    ['push2', 'https://push2.eastmoney.com', baseParams],
-    ['hsmarketwg', 'https://push2.hsmarketwg.eastmoney.com', { ...baseParams, cb: 'jQuery' }],
-  ];
-
-  for (const [label, host, params] of candidates) {
-    try {
-      const rows = await requestBoardClist(host, params, label);
-      return {
-        source: `eastmoney_${label}_board_flow`,
-        data: rows.map(x => normalize(x, kind, label)).filter(x => x.bk || x.name),
-        attempts,
-      };
-    } catch (err) {
-      attempts.push({ source: label, error: String(err && err.message ? err.message : err) });
-    }
+  const rows = [];
+  settled.forEach((result, index) => {
+    if (result.status === 'fulfilled') rows.push(...result.value);
+    else attempts.push({ kind: kinds[index], error: String(result.reason?.message || result.reason) });
+  });
+  const deduped = [...new Map(rows.map(row => [`${row.kind}:${row.bk}`, row])).values()];
+  const validation = validateSectorRows(deduped);
+  if (!validation.success) {
+    return { success: false, data: deduped, attempts, validation };
   }
-
-  // 兜底：用已跑通的 hotboard/get 拿板块强度与成交额。该源不一定有 f62 主力净流入字段，mainNetYi 会为空。
-  try {
-    const hotKind = kind === 'concept' ? 'm:90+t:3' : 'm:90+t:2';
-    const url = buildUrl('https://push2.hsmarketwg.eastmoney.com/api/qt/clist/hotboard/get', {
-      pn: 1,
-      pz,
-      po: 1,
-      np: 1,
-      fltt: 2,
-      invt: 2,
-      fid: sort === 'amount' ? 'f6' : 'f3',
-      fs: hotKind,
-      fields: 'f12,f14,f2,f3,f5,f6,f62,f66,f72,f78,f84,f184',
-      cb: 'jQuery',
-    });
-    const data = await requestJson(url, { headers: { 'User-Agent': 'Mozilla/5.0', Referer: 'https://quote.eastmoney.com/' }, timeoutMs: 10000 });
-    const rows = parseDiff(data);
-    if (!rows.length) throw new Error('hotboard empty');
-    return {
-      source: 'eastmoney_hsmarketwg_hotboard_fallback',
-      data: rows.map(x => normalize(x, kind, 'hotboard')).filter(x => x.bk || x.name),
-      attempts,
-      fallbackNote: 'hotboard 兜底源偏板块强度/成交额，主力净流入字段可能为空。',
-    };
-  } catch (err) {
-    attempts.push({ source: 'hotboard', error: String(err && err.message ? err.message : err) });
-  }
-
-  return { source: 'none', data: [], attempts, fallbackNote: '全部上游失败，返回空数组而不是 502。' };
+  return {
+    success: true,
+    source: 'eastmoney_push2_akshare_contract',
+    data: deduped,
+    attempts,
+    status: attempts.length ? 'PARTIAL' : 'OK',
+  };
 }
 
 module.exports = async (req, res) => {
   if (setCors(req, res)) return;
-  if (req.method !== 'GET') return json(res, 405, { success: false, error: 'Method not allowed' });
+  if (req.method !== 'GET') return json(res, 405, failure('METHOD_NOT_ALLOWED', 'Method not allowed'));
 
   const kind = ['concept', 'industry', 'both'].includes(req.query.kind) ? req.query.kind : 'concept';
   const top = Math.min(Math.max(Number(req.query.top || 30), 1), 60);
   const sort = ['mainNet', 'changePct', 'amount'].includes(req.query.sort) ? req.query.sort : 'mainNet';
   const ttlMs = Number(req.query.ttlMs || 3 * 60 * 1000);
-  const key = `sector-money-flow:v2:${kind}:${top}:${sort}`;
+  const key = `sector-money-flow:v3:${kind}:${top}:${sort}`;
 
   try {
     const { value, cached: fromCache } = await cached(key, ttlMs, () => fetchFlow(kind, top, sort));
+    if (!value.success) {
+      return json(res, 503, {
+        ...value.validation,
+        mode: 'sector_money_flow_v3',
+        kind,
+        sort,
+        data: value.data,
+        diagnostics: { attempts: value.attempts },
+      });
+    }
     return json(res, 200, okBase({
-      mode: 'sector_money_flow_v2',
+      mode: 'sector_money_flow_v3',
+      status: value.status,
       source: value.source,
       kind,
       sort,
@@ -131,11 +123,18 @@ module.exports = async (req, res) => {
       cached: fromCache,
       count: value.data.length,
       data: value.data,
-      diagnostics: { attempts: value.attempts || [], fallbackNote: value.fallbackNote || '' },
-      limits: { maxTop: 60, redisWrites: 0, defaultTtlMs: ttlMs },
-      note: '板块资金流用于验证容量资金方向；若资金流字段为空，会退化为板块强度/成交额兜底，不进入10分钟自动采样。',
+      diagnostics: { attempts: value.attempts },
     }));
   } catch (err) {
-    return json(res, 200, okBase({ success: false, mode: 'sector_money_flow_v2', error: String(err && err.message ? err.message : err), data: [], diagnostics: { reason: 'unexpected handler error' } }));
+    return json(res, 503, {
+      ...failure('UPSTREAM_FAILED', String(err?.message || err)),
+      mode: 'sector_money_flow_v3',
+      kind,
+      sort,
+      data: [],
+    });
   }
 };
+
+module.exports.fetchFlow = fetchFlow;
+module.exports.normalize = normalize;
