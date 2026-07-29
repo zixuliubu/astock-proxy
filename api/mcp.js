@@ -1,6 +1,6 @@
 const ASTOCK_BASE_URL = process.env.ASTOCK_BASE_URL || 'https://astock-proxy.vercel.app';
 const SERVER_NAME = 'astock-mcp';
-const SERVER_VERSION = '1.7.4';
+const SERVER_VERSION = '1.8.0';
 const PRIVATE_MCP_PATH = '/mcp-laoda-20260708-x7k29q';
 
 function schema(props = {}, required = []) { return { type: 'object', properties: props, required, additionalProperties: false }; }
@@ -16,18 +16,18 @@ const tools = [
   tool('get_stock_quote', '获取A股个股实时行情', '查询A股个股实时行情，支持多个代码。', symbolsInputSchema({ detail: { type: 'boolean', description: '是否返回补充详情。' } })),
   tool('get_orderbook_lite', '获取轻量五档盘口', '按 symbols 查询少数核心票的轻量五档盘口、买卖盘压强、上一帧变化和盘口强度。最多8只；用于盘中打板票、趋势票、观察池核心票确认；不是 Level-2 逐笔盘口。', symbolsInputSchema({ ttlMs: { type: 'integer', description: '缓存毫秒，默认5000，范围1000-10000。' }, compare: { type: 'boolean', description: '是否返回上一帧变化，默认false。盘中10秒轮询建议true。' } })),
   tool('get_watchlist_orderbook', '获取观察池盘口聚合', '按观察池 group 或自定义 symbols 聚合轻量盘口，输出 strongest、weakest、topAmount 和角色标签。用于盘前固定池、盘中新增、打板票、趋势票的盘口确认。', schema({ group: { type: 'string', description: '观察池组：default、semiconductor、robot、ai_compute、innovation_drug、fluorochemical、paper、market_core。默认 default。' }, symbols: { type: 'string', description: '自定义股票代码，多个逗号分隔；传入后优先于 group。' }, ttlMs: { type: 'integer', description: '缓存毫秒，默认5000，范围1000-10000。' }, compare: { type: 'boolean', description: '是否返回上一帧变化，默认true。' } })),
-  tool('get_market_overview', '获取大盘指数和两市成交额', '查询指数表现、成交额近似值、涨跌家数和市场总览标签。', emptyInputSchema()),
+  tool('get_market_overview', '获取大盘指数和两市成交额', '查询主要指数、两市成交额和来源状态；关键字段缺失时返回结构化失败。', emptyInputSchema()),
   tool('get_limit_up_pool', '获取今日涨停池', '查询涨停池、连板数据、最高板、二板、三板、首板、题材归因。', dateInputSchema()),
   tool('get_broken_limit_pool', '获取今日炸板池', '查询炸板池、炸板数量、炸板题材和炸板时间。', dateInputSchema()),
   tool('get_limit_down_pool', '获取今日跌停池', '查询跌停池、连续跌停、跌停时间和风险方向。', dateInputSchema()),
   tool('get_lianban_ladder', '获取标准化连板梯队', '按最高板、三板、二板、首板、连板分布整理。', dateInputSchema()),
   tool('get_core_stock_watchlist', '获取板块核心大票和观察池状态', '查询板块核心大票或自定义观察票的成交额、涨跌幅、分时位置和承接强弱。', schema({ group: { type: 'string', description: '预设观察组。' }, symbols: { type: 'string', description: '自定义股票代码。' } })),
-  tool('get_hot_sectors', '获取A股热门板块', '查询热门板块、板块涨幅、强度，用于判断主线、次主线和资金进攻方向。', emptyInputSchema()),
+  tool('get_hot_sectors', '获取A股热门板块', '查询行业与概念板块的真实涨跌幅、成交额和主力净流入；字段缺失时返回结构化失败。', emptyInputSchema()),
   tool('get_market_sentiment', '获取A股市场情绪', '查询涨停数、跌停数、炸板率、连板分布等市场情绪数据。', emptyInputSchema()),
   tool('get_intraday_node_snapshot', '获取盘中节点快照', '获取当前时刻所属10分钟盘中节点、下一节点、指数/情绪/连板/板块快照。', emptyInputSchema()),
   tool('get_intraday_timeline', '获取已保存的盘中节点变化时间线', '读取已保存的10分钟级盘中节点快照，输出节点变化、涨停变化、炸板变化、成交额变化、连板高度变化。', dateInputSchema()),
   tool('get_news_catalysts', '获取消息面催化线索', '获取盘中/盘后财经快讯和题材催化线索；只做催化验证，不作为硬盘口主源。', emptyInputSchema()),
-  tool('get_dragon_tiger_list', '获取龙虎榜列表', '获取东方财富龙虎榜列表，包括上榜原因、净买额、买入额、卖出额。', dateInputSchema()),
+  tool('get_dragon_tiger_list', '获取龙虎榜列表', '获取东方财富龙虎榜列表，包括上榜原因、净买额、买入额、卖出额和榜单成交额；金额字段不完整时返回结构化失败。', dateInputSchema()),
   tool('get_dragon_tiger_detail', '获取龙虎榜席位明细', '按日期和股票代码查询龙虎榜买卖席位明细，返回席位买入额、卖出额、净买额、机构/陆股通/拉萨/疑似游资标签，并区分未上榜、明细缺失、明细成功。席位标签为规则识别，不代表官方身份确认。', symbolsInputSchema({ date: { type: 'string', description: '日期 YYYYMMDD；不填默认今日。' }, ttlMs: { type: 'integer', description: '缓存毫秒，默认300000。' } })),
   tool('get_dragon_tiger_seat_radar', '获取龙虎榜席位雷达', '按日期和可选股票池聚合龙虎榜席位质量，输出机构净买、疑似游资、拉萨系、一家独大、高风险榜，并分开标记 not_on_list / listed_detail_missing / detail_ok。用于次日对手盘质量判断。', schema({ date: { type: 'string', description: '日期 YYYYMMDD；不填默认今日。' }, symbols: { type: 'string', description: '可选股票代码，多个逗号分隔；不填则扫描当日龙虎榜前若干只。' }, limit: { type: 'integer', description: '不传 symbols 时扫描数量，默认30，最多50。' }, ttlMs: { type: 'integer', description: '缓存毫秒，默认300000。' } })),
   tool('get_dragon_tiger_debug', '诊断龙虎榜席位明细缺失原因', '诊断某只股票龙虎榜席位明细为什么缺失：是否未上榜、是否已上榜但明细表未返回、哪个东方财富 reportName/过滤条件有候选数据。用于修接口和判断数据状态，不用于直接交易决策。', symbolsInputSchema({ date: { type: 'string', description: '日期 YYYYMMDD；不填默认今日。' }, ttlMs: { type: 'integer', description: '缓存毫秒，默认300000。' } })),
