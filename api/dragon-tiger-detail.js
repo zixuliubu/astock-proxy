@@ -1,6 +1,7 @@
 const { json, setCors, cleanCode, parseSymbols, requestJson, buildUrl, okBase, cached, yi } = require('./_stock-utils');
 const { tagSeat, summarizeSeats } = require('./_seat-tags');
 const { fetchSeat } = require('./dragon-tiger-seat-em');
+const { selectDragonTigerSeats, summarizeDragonTigerSeats } = require('./_data-contracts');
 
 const EASTMONEY_DATA_URL = 'https://datacenter-web.eastmoney.com/api/data/v1/get';
 const LIST_REPORT = 'RPT_DAILYBILLBOARD_DETAILSNEW';
@@ -231,7 +232,9 @@ async function fetchDragonTigerDetail({ date, symbol, deep = false, maxReports =
   try {
     const verified = await fetchSeat({ date: tradeDate, symbol: code });
     attempts.push(...(verified.attempts || []).map(item => ({ type: 'akshare_verified_seat', ...item })));
-    const seats = [...(verified.buySeats || []), ...(verified.sellSeats || [])];
+    const selectedTradeId = listCheck?.listRow?.tradeId || '';
+    const selected = selectDragonTigerSeats(verified.buySeats, verified.sellSeats, selectedTradeId);
+    const seats = [...selected.buySeats, ...selected.sellSeats];
     if (seats.length) {
       return {
         success: true,
@@ -243,13 +246,14 @@ async function fetchDragonTigerDetail({ date, symbol, deep = false, maxReports =
         listRow: listCheck ? listCheck.listRow : null,
         listRows: listCheck ? listCheck.listRows : [],
         tradeIds: listCheck ? listCheck.tradeIds : [],
+        selectedTradeId,
         count: seats.length,
         seats,
-        buySeats: verified.buySeats || [],
-        sellSeats: verified.sellSeats || [],
-        summary: verified.summary,
+        buySeats: selected.buySeats,
+        sellSeats: selected.sellSeats,
+        summary: summarizeDragonTigerSeats(selected.buySeats, selected.sellSeats, yi),
         attempts,
-        note: 'Seat rows use Eastmoney BUY/SELL reports verified against AKShare; inferred seat tags are not official identity confirmation.',
+        note: 'Seat rows are restricted to the selected list-row TRADE_ID. BUY totals use BUY rows and SELL totals use SELL rows exactly once; inferred seat tags are not official identity confirmation.',
       };
     }
   } catch (err) {

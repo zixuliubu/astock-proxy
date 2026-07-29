@@ -181,6 +181,37 @@ function validateReviewMinimum(bundle) {
   };
 }
 
+function selectDragonTigerSeats(buySeats, sellSeats, tradeId) {
+  const id = String(tradeId || '');
+  const select = rows => (Array.isArray(rows) ? rows : [])
+    .filter(row => !id || String(row.tradeId || '') === id);
+  return {
+    buySeats: select(buySeats),
+    sellSeats: select(sellSeats),
+  };
+}
+
+function summarizeDragonTigerSeats(buySeats, sellSeats, yi) {
+  const buyers = Array.isArray(buySeats) ? buySeats : [];
+  const sellers = Array.isArray(sellSeats) ? sellSeats : [];
+  const buyTotal = buyers.reduce((sum, row) => sum + Number(row.buyAmount || 0), 0);
+  const sellTotal = sellers.reduce((sum, row) => sum + Number(row.sellAmount || 0), 0);
+  const netTotal = buyTotal - sellTotal;
+  return {
+    buyTotal,
+    sellTotal,
+    netTotal,
+    buyTotalYi: yi(buyTotal),
+    sellTotalYi: yi(sellTotal),
+    netTotalYi: yi(netTotal),
+    buySeatCount: buyers.length,
+    sellSeatCount: sellers.length,
+    topBuy: buyers[0] || null,
+    topSell: sellers[0] || null,
+    aggregation: 'selected_trade_id_buy_side_plus_sell_side',
+  };
+}
+
 module.exports = {
   REQUIRED_INDEX_CODES,
   TRADING_NODES,
@@ -194,4 +225,6 @@ module.exports = {
   timelineCoverage,
   validateDragonTigerRows,
   validateReviewMinimum,
+  selectDragonTigerSeats,
+  summarizeDragonTigerSeats,
 };

@@ -58,6 +58,8 @@ function normalizeSeat(row, side, index) {
     seatName: name,
     seatCode: String(pick(row, ['OPERATEDEPT_CODE', 'SEAT_CODE', 'OPERATEDEPT_CODE_OLD'], '') || '').trim(),
     seatType: String(pick(row, ['OPERATEDEPT_TYPE', 'TYPE', 'DEPT_TYPE'], '') || '').trim(),
+    tradeId: String(pick(row, ['TRADE_ID', 'BILLBOARD_TRADE_ID'], '') || '').trim(),
+    explanation: String(pick(row, ['EXPLANATION', 'EXPLAIN'], '') || '').trim(),
     buyAmount,
     sellAmount,
     netAmount,

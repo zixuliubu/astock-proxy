@@ -4,6 +4,8 @@ const {
   TRADING_NODES,
   normalizeNode,
   summarizeCumulativeFlow,
+  selectDragonTigerSeats,
+  summarizeDragonTigerSeats,
   timelineCoverage,
   validateDragonTigerRows,
   validateMarketOverview,
@@ -93,4 +95,25 @@ test('daily review bundle propagates a critical component failure', () => {
     status: 'DATA_INSUFFICIENT',
     criticalFailures: ['hotSectors'],
   });
+});
+
+test('dragon-tiger detail selects one trade id and does not double count buy/sell reports', () => {
+  const selected = selectDragonTigerSeats(
+    [
+      { tradeId: 'A', buyAmount: 100 },
+      { tradeId: 'B', buyAmount: 200 },
+    ],
+    [
+      { tradeId: 'A', sellAmount: 60 },
+      { tradeId: 'B', sellAmount: 80 },
+    ],
+    'A',
+  );
+  const summary = summarizeDragonTigerSeats(selected.buySeats, selected.sellSeats, yi);
+  assert.equal(summary.buyTotal, 100);
+  assert.equal(summary.sellTotal, 60);
+  assert.equal(summary.netTotal, 40);
+  assert.equal(summary.buySeatCount, 1);
+  assert.equal(summary.sellSeatCount, 1);
+  assert.equal(summary.aggregation, 'selected_trade_id_buy_side_plus_sell_side');
 });
