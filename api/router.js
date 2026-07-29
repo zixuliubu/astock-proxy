@@ -31,6 +31,9 @@ const handlers = {
   'watchlist-auto-label': () => require('./watchlist-auto-label'),
   'orderbook-lite': () => require('./orderbook-lite'),
   'watchlist-orderbook': () => require('./watchlist-orderbook'),
+  'system-radar-latest': () => require('./system-radar-latest'),
+  'system-active-pool': () => require('./system-active-pool'),
+  'system-data-health': () => require('./system-data-health'),
   'health-check': () => require('./health-check'),
   openapi: () => require('./openapi'),
 };
