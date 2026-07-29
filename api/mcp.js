@@ -108,7 +108,24 @@ async function callTool(name, args = {}) {
     get_system_data_health: ['/api/system-data-health', { token: process.env.SYSTEM_BRIDGE_READ_SECRET || process.env.CAPTURE_SECRET }],
   };
   if (!map[name]) throw new Error(`Unknown tool: ${name}`);
-  return fetchJson(map[name][0], map[name][1]);
+  const result = await fetchJson(map[name][0], map[name][1]);
+  return preserveSystemBridgeFailure(name, result);
+}
+
+function preserveSystemBridgeFailure(name, result) {
+  if (!String(name).startsWith('get_system_')) return result;
+  if (
+    result?.success === false
+    && Number.isInteger(result.status)
+    && result.data?.success === false
+  ) {
+    return {
+      ...result.data,
+      httpStatus: result.status,
+      url: result.url,
+    };
+  }
+  return result;
 }
 
 async function handleRpc(message) {
@@ -148,3 +165,5 @@ module.exports = async (req, res) => {
   if (responses.length === 0) return res.status(202).end();
   return json(res, 200, Array.isArray(body) ? responses : responses[0]);
 };
+
+module.exports.preserveSystemBridgeFailure = preserveSystemBridgeFailure;
