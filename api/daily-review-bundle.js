@@ -1,4 +1,4 @@
-const { validateReviewMinimum } = require('./_data-contracts');
+const { validateReviewMinimum, compactReviewSector } = require('./_data-contracts');
 const ASTOCK_BASE_URL = process.env.ASTOCK_BASE_URL || 'https://astock-proxy.vercel.app';
 const CAPTURE_SECRET = process.env.CAPTURE_SECRET;
 const CACHE_TTL_MS = Number(process.env.REVIEW_BUNDLE_CACHE_TTL_MS || 60 * 1000);
@@ -139,13 +139,7 @@ function compactSectors(sectors) {
   return {
     success: sectors?.success === true,
     count: sectors?.count || 0,
-    top: take(sectors?.data, 15).map(x => ({
-      name: x.name || x.sector || x.title,
-      changePct: x.changePct || x.zdf || x涨跌幅,
-      amount: x.amount || x成交额,
-      strength: x.strength || x.score || x强度,
-      raw: x,
-    })),
+    top: take(sectors?.data, 15).map(compactReviewSector),
   };
 }
 
