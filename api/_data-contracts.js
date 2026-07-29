@@ -140,9 +140,11 @@ function validateDragonTigerRows(rows) {
     || !isNumber(row.buyAmount)
     || !isNumber(row.sellAmount)
     || !isNumber(row.amount)
-    || row.buyAmount <= 0
-    || row.sellAmount <= 0
+    || row.buyAmount < 0
+    || row.sellAmount < 0
     || row.amount <= 0
+    || row.buyAmount + row.sellAmount <= 0
+    || Math.abs(row.amount - row.buyAmount - row.sellAmount) > Math.max(1, row.amount * 0.001)
   ));
   if (incomplete.length) {
     return failure('DATA_INSUFFICIENT', 'Dragon-tiger rows have incomplete amount fields', {

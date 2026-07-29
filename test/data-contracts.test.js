@@ -59,12 +59,12 @@ test('timeline ignores invalid UTC labels, reports missing scheduled nodes, and 
   assert.equal(coverage.sorted.find(x => x.node === '09:15').capturedAt, 'b');
 });
 
-test('dragon-tiger list rejects zero buy/sell/deal amounts', () => {
+test('dragon-tiger list rejects missing deal amounts but accepts verified one-sided rows', () => {
   assert.equal(validateDragonTigerRows([
-    { code: '001258', name: '立新能源', buyAmount: 0, sellAmount: 1, amount: 1 },
+    { code: '001258', name: '立新能源', buyAmount: 0, sellAmount: 0, amount: 0 },
   ]).status, 'DATA_INSUFFICIENT');
   assert.equal(validateDragonTigerRows([
-    { code: '001258', name: '立新能源', buyAmount: 10, sellAmount: 8, amount: 18 },
+    { code: '603297', name: '永新光学', buyAmount: 99230326, sellAmount: 0, amount: 99230326 },
   ]).success, true);
 });
 
