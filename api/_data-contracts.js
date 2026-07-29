@@ -191,12 +191,19 @@ function selectDragonTigerSeats(buySeats, sellSeats, tradeId) {
   };
 }
 
-function summarizeDragonTigerSeats(buySeats, sellSeats, yi) {
+function summarizeDragonTigerSeats(buySeats, sellSeats, yi, listRow = null) {
   const buyers = Array.isArray(buySeats) ? buySeats : [];
   const sellers = Array.isArray(sellSeats) ? sellSeats : [];
-  const buyTotal = buyers.reduce((sum, row) => sum + Number(row.buyAmount || 0), 0);
-  const sellTotal = sellers.reduce((sum, row) => sum + Number(row.sellAmount || 0), 0);
-  const netTotal = buyTotal - sellTotal;
+  const seatTop5BuyTotal = buyers.reduce((sum, row) => sum + Number(row.buyAmount || 0), 0);
+  const seatTop5SellTotal = sellers.reduce((sum, row) => sum + Number(row.sellAmount || 0), 0);
+  const listBuy = Number(listRow?.buyAmount);
+  const listSell = Number(listRow?.sellAmount);
+  const listNet = Number(listRow?.netAmount);
+  const buyTotal = Number.isFinite(listBuy) ? listBuy : seatTop5BuyTotal;
+  const sellTotal = Number.isFinite(listSell) ? listSell : seatTop5SellTotal;
+  const netTotal = Number.isFinite(listNet) ? listNet : buyTotal - sellTotal;
+  const buyCoverage = buyTotal > 0 ? seatTop5BuyTotal / buyTotal : null;
+  const sellCoverage = sellTotal > 0 ? seatTop5SellTotal / sellTotal : null;
   return {
     buyTotal,
     sellTotal,
@@ -206,9 +213,19 @@ function summarizeDragonTigerSeats(buySeats, sellSeats, yi) {
     netTotalYi: yi(netTotal),
     buySeatCount: buyers.length,
     sellSeatCount: sellers.length,
+    seatTop5BuyTotal,
+    seatTop5SellTotal,
+    seatTop5BuyTotalYi: yi(seatTop5BuyTotal),
+    seatTop5SellTotalYi: yi(seatTop5SellTotal),
+    seatTop5BuyCoverage: buyCoverage,
+    seatTop5SellCoverage: sellCoverage,
+    reconciliationStatus: buyCoverage !== null && sellCoverage !== null
+      && buyCoverage >= 0.99 && sellCoverage >= 0.99 ? 'MATCHED' : 'PARTIAL',
     topBuy: buyers[0] || null,
     topSell: sellers[0] || null,
-    aggregation: 'selected_trade_id_buy_side_plus_sell_side',
+    aggregation: Number.isFinite(listBuy) && Number.isFinite(listSell)
+      ? 'authoritative_list_row_totals_with_selected_trade_id_top5_breakdown'
+      : 'selected_trade_id_top5_breakdown_only',
   };
 }
 

@@ -109,11 +109,18 @@ test('dragon-tiger detail selects one trade id and does not double count buy/sel
     ],
     'A',
   );
-  const summary = summarizeDragonTigerSeats(selected.buySeats, selected.sellSeats, yi);
-  assert.equal(summary.buyTotal, 100);
-  assert.equal(summary.sellTotal, 60);
-  assert.equal(summary.netTotal, 40);
+  const summary = summarizeDragonTigerSeats(selected.buySeats, selected.sellSeats, yi, {
+    buyAmount: 120,
+    sellAmount: 75,
+    netAmount: 45,
+  });
+  assert.equal(summary.buyTotal, 120);
+  assert.equal(summary.sellTotal, 75);
+  assert.equal(summary.netTotal, 45);
+  assert.equal(summary.seatTop5BuyTotal, 100);
+  assert.equal(summary.seatTop5SellTotal, 60);
   assert.equal(summary.buySeatCount, 1);
   assert.equal(summary.sellSeatCount, 1);
-  assert.equal(summary.aggregation, 'selected_trade_id_buy_side_plus_sell_side');
+  assert.equal(summary.reconciliationStatus, 'PARTIAL');
+  assert.equal(summary.aggregation, 'authoritative_list_row_totals_with_selected_trade_id_top5_breakdown');
 });

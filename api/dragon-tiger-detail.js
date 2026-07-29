@@ -251,9 +251,9 @@ async function fetchDragonTigerDetail({ date, symbol, deep = false, maxReports =
         seats,
         buySeats: selected.buySeats,
         sellSeats: selected.sellSeats,
-        summary: summarizeDragonTigerSeats(selected.buySeats, selected.sellSeats, yi),
+        summary: summarizeDragonTigerSeats(selected.buySeats, selected.sellSeats, yi, listCheck?.listRow),
         attempts,
-        note: 'Seat rows are restricted to the selected list-row TRADE_ID. BUY totals use BUY rows and SELL totals use SELL rows exactly once; inferred seat tags are not official identity confirmation.',
+        note: 'Seat rows are restricted to the selected list-row TRADE_ID. List totals use BILLBOARD list fields; selected TRADE_ID BUY/SELL rows are exposed as Top-5 coverage without being promoted to list totals; inferred seat tags are not official identity confirmation.',
       };
     }
   } catch (err) {
