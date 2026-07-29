@@ -3,7 +3,13 @@ const REDIS_URL = process.env.UPSTASH_REDIS_REST_URL;
 const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
 const CAPTURE_SECRET = process.env.CAPTURE_SECRET;
 const NODE_TTL_SECONDS = Number(process.env.NODE_TTL_SECONDS || 60 * 60 * 24 * 30);
-const { TRADING_NODES, normalizeNode, failure } = require('./_data-contracts');
+const MAX_CAPTURE_LAG_MINUTES = Number(process.env.MAX_CAPTURE_LAG_MINUTES || 9);
+const {
+  TRADING_NODES,
+  normalizeNode,
+  resolveCaptureWindow,
+  failure,
+} = require('./_data-contracts');
 
 function json(res, status, body) {
   res.statusCode = status;
@@ -27,15 +33,6 @@ function chinaParts() {
     time: `${parts.hour}:${parts.minute}:${parts.second}`,
     isoLike: `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`,
   };
-}
-
-function nearestNode(hhmmss) {
-  const hhmm = String(hhmmss || '').slice(0, 5);
-  let current = null;
-  for (const node of TRADING_NODES) {
-    if (hhmm >= node) current = node;
-  }
-  return current;
 }
 
 function checkAuth(req) {
@@ -113,7 +110,7 @@ function brief(snapshot) {
   };
 }
 
-async function collectSnapshot(node, date) {
+async function collectSnapshot(node, date, captureMeta = {}) {
   const names = [
     'marketOverview', 'marketSentiment', 'lianbanLadder', 'limitUpPool',
     'brokenLimitPool', 'limitDownPool', 'hotSectors', 'watchlist', 'newsCatalysts',
@@ -138,6 +135,9 @@ async function collectSnapshot(node, date) {
     chinaTime: cp.isoLike,
     capturedAt: new Date().toISOString(),
     source: 'capture-node',
+    scheduledTargetNode: captureMeta.scheduledTargetNode || node,
+    captureLagMinutes: captureMeta.captureLagMinutes ?? null,
+    nodeResolution: captureMeta.nodeResolution || 'unknown',
     componentStatus: Object.fromEntries(names.map(name => [
       name,
       data[name]?.success === false ? data[name]?.status || 'failed' : 'ok',
@@ -162,34 +162,53 @@ module.exports = async (req, res) => {
 
   const cp = chinaParts();
   const date = String(req.query.date || cp.date).replace(/-/g, '');
-  const requestedNode = req.query.node ? normalizeNode(req.query.node) : nearestNode(cp.time);
-  if (!requestedNode) {
-    return json(res, 400, failure('INVALID_ARGUMENT', 'node must be a scheduled Asia/Shanghai trading node', {
-      requestedNode: req.query.node || null,
-      scheduledNodes: TRADING_NODES,
+  if (date !== cp.date) {
+    return json(res, 409, failure('DATA_INSUFFICIENT', 'Historical or future snapshots cannot be reconstructed from current market data', {
+      requestedDate: date,
+      chinaDate: cp.date,
       chinaTime: cp.isoLike,
     }));
   }
-  const key = `astock:intraday:${date}`;
+
+  const captureWindow = resolveCaptureWindow(
+    cp.time.slice(0, 5),
+    req.query.node,
+    MAX_CAPTURE_LAG_MINUTES,
+  );
+  if (!captureWindow.success) {
+    const httpStatus = captureWindow.status === 'INVALID_ARGUMENT' ? 400 : 409;
+    return json(res, httpStatus, failure(captureWindow.status, captureWindow.reason, {
+      requestedNode: req.query.node || null,
+      scheduledNodes: TRADING_NODES,
+      chinaTime: cp.isoLike,
+      captureWindow,
+    }));
+  }
+  const requestedNode = captureWindow.node;
+  const scheduledTargetNode = normalizeNode(req.query.scheduledNode) || requestedNode;
+  const key = `astock:intraday:v2:${date}`;
 
   try {
-    const snapshot = await collectSnapshot(requestedNode, date);
-    const existingRaw = await redisCommand(['GET', key]);
-    let timeline = [];
-    if (existingRaw) {
+    const snapshot = await collectSnapshot(requestedNode, date, {
+      scheduledTargetNode,
+      captureLagMinutes: captureWindow.lagMinutes,
+      nodeResolution: captureWindow.resolution,
+    });
+    const previousRaw = await redisCommand(['HGET', key, requestedNode]);
+    let previousSnapshot = null;
+    if (previousRaw) {
       try {
-        timeline = JSON.parse(existingRaw);
+        previousSnapshot = JSON.parse(previousRaw);
       } catch (error) {
-        timeline = [];
+        previousSnapshot = null;
       }
     }
-    const replacedNode = timeline.some(item => item.node === requestedNode);
-    const nextTimeline = [
-      ...timeline.filter(item => item.node !== requestedNode),
-      snapshot,
-    ].sort((left, right) => TRADING_NODES.indexOf(left.node) - TRADING_NODES.indexOf(right.node));
-    await redisCommand(['SET', key, JSON.stringify(nextTimeline)]);
+    const replacedNode = Boolean(previousSnapshot);
+    snapshot.replacementCount = Number(previousSnapshot?.replacementCount || 0) + (replacedNode ? 1 : 0);
+    snapshot.replacedPreviousCapturedAt = previousSnapshot?.capturedAt || null;
+    await redisCommand(['HSET', key, requestedNode, JSON.stringify(snapshot)]);
     await redisCommand(['EXPIRE', key, String(NODE_TTL_SECONDS)]);
+    const savedCount = Number(await redisCommand(['HLEN', key])) || 0;
 
     const criticalFailures = ['marketOverview', 'marketSentiment', 'lianbanLadder', 'hotSectors']
       .filter(name => snapshot.componentStatus[name] !== 'ok');
@@ -199,13 +218,19 @@ module.exports = async (req, res) => {
       status: success ? 'OK' : 'DATA_INSUFFICIENT',
       mode: 'saved_intraday_node_snapshot',
       key,
+      storageSchema: 'redis_hash_by_scheduled_node_v2',
       date,
       node: requestedNode,
       timeZone: 'Asia/Shanghai',
       actualChinaTime: snapshot.chinaTime,
+      scheduledTargetNode,
+      captureLagMinutes: captureWindow.lagMinutes,
+      nodeResolution: captureWindow.resolution,
       replacedNode,
+      replacementCount: snapshot.replacementCount,
+      replacedPreviousCapturedAt: snapshot.replacedPreviousCapturedAt,
       duplicatePolicy: 'replace the snapshot for the same scheduled node',
-      savedCount: nextTimeline.length,
+      savedCount,
       criticalFailures,
       componentStatus: snapshot.componentStatus,
       brief: snapshot.brief,
@@ -216,4 +241,4 @@ module.exports = async (req, res) => {
   }
 };
 
-module.exports.nearestNode = nearestNode;
+module.exports.collectSnapshot = collectSnapshot;

@@ -12,103 +12,133 @@ on:
         required: false
         type: string
   schedule:
-    # Cron is UTC. The API stores the scheduled China-time label even when Actions starts late.
+    # Cron is UTC and starts 4-5 minutes early. The runner waits for the target
+    # node; if GitHub starts more than 9 minutes late, the API resolves the
+    # actual elapsed node instead of writing stale data under a false label.
+    - cron: '10 1 * * 1-5'
     - cron: '15 1 * * 1-5'
     - cron: '20 1 * * 1-5'
-    - cron: '25 1 * * 1-5'
-    - cron: '35 1 * * 1-5'
-    - cron: '45 1 * * 1-5'
-    - cron: '55 1 * * 1-5'
-    - cron: '5 2 * * 1-5'
-    - cron: '15 2 * * 1-5'
-    - cron: '25 2 * * 1-5'
-    - cron: '35 2 * * 1-5'
-    - cron: '45 2 * * 1-5'
-    - cron: '55 2 * * 1-5'
-    - cron: '5 3 * * 1-5'
-    - cron: '15 3 * * 1-5'
-    - cron: '25 3 * * 1-5'
-    - cron: '5 5 * * 1-5'
-    - cron: '15 5 * * 1-5'
-    - cron: '25 5 * * 1-5'
-    - cron: '35 5 * * 1-5'
-    - cron: '45 5 * * 1-5'
-    - cron: '55 5 * * 1-5'
-    - cron: '5 6 * * 1-5'
-    - cron: '15 6 * * 1-5'
-    - cron: '25 6 * * 1-5'
-    - cron: '35 6 * * 1-5'
-    - cron: '45 6 * * 1-5'
+    - cron: '30 1 * * 1-5'
+    - cron: '40 1 * * 1-5'
+    - cron: '50 1 * * 1-5'
+    - cron: '1 2 * * 1-5'
+    - cron: '10 2 * * 1-5'
+    - cron: '20 2 * * 1-5'
+    - cron: '30 2 * * 1-5'
+    - cron: '40 2 * * 1-5'
+    - cron: '50 2 * * 1-5'
+    - cron: '1 3 * * 1-5'
+    - cron: '10 3 * * 1-5'
+    - cron: '20 3 * * 1-5'
+    - cron: '1 5 * * 1-5'
+    - cron: '10 5 * * 1-5'
+    - cron: '20 5 * * 1-5'
+    - cron: '30 5 * * 1-5'
+    - cron: '40 5 * * 1-5'
+    - cron: '50 5 * * 1-5'
+    - cron: '1 6 * * 1-5'
+    - cron: '10 6 * * 1-5'
+    - cron: '20 6 * * 1-5'
+    - cron: '30 6 * * 1-5'
+    - cron: '40 6 * * 1-5'
+    - cron: '50 6 * * 1-5'
     - cron: '55 6 * * 1-5'
-    - cron: '0 7 * * 1-5'
 
 jobs:
   capture:
     runs-on: ubuntu-latest
+    timeout-minutes: 12
     steps:
-      - name: Resolve scheduled node
-        id: node
+      - name: Resolve target and wait
+        id: target
         shell: bash
         env:
           INPUT_NODE: ${{ github.event.inputs.node }}
           SCHEDULE: ${{ github.event.schedule }}
         run: |
           if [ -n "$INPUT_NODE" ]; then
-            NODE="$INPUT_NODE"
+            TARGET_NODE="$INPUT_NODE"
+            MANUAL="true"
           else
             case "$SCHEDULE" in
-              "15 1 * * 1-5") NODE="09:15" ;;
-              "20 1 * * 1-5") NODE="09:20" ;;
-              "25 1 * * 1-5") NODE="09:25" ;;
-              "35 1 * * 1-5") NODE="09:35" ;;
-              "45 1 * * 1-5") NODE="09:45" ;;
-              "55 1 * * 1-5") NODE="09:55" ;;
-              "5 2 * * 1-5") NODE="10:05" ;;
-              "15 2 * * 1-5") NODE="10:15" ;;
-              "25 2 * * 1-5") NODE="10:25" ;;
-              "35 2 * * 1-5") NODE="10:35" ;;
-              "45 2 * * 1-5") NODE="10:45" ;;
-              "55 2 * * 1-5") NODE="10:55" ;;
-              "5 3 * * 1-5") NODE="11:05" ;;
-              "15 3 * * 1-5") NODE="11:15" ;;
-              "25 3 * * 1-5") NODE="11:25" ;;
-              "5 5 * * 1-5") NODE="13:05" ;;
-              "15 5 * * 1-5") NODE="13:15" ;;
-              "25 5 * * 1-5") NODE="13:25" ;;
-              "35 5 * * 1-5") NODE="13:35" ;;
-              "45 5 * * 1-5") NODE="13:45" ;;
-              "55 5 * * 1-5") NODE="13:55" ;;
-              "5 6 * * 1-5") NODE="14:05" ;;
-              "15 6 * * 1-5") NODE="14:15" ;;
-              "25 6 * * 1-5") NODE="14:25" ;;
-              "35 6 * * 1-5") NODE="14:35" ;;
-              "45 6 * * 1-5") NODE="14:45" ;;
-              "55 6 * * 1-5") NODE="14:55" ;;
-              "0 7 * * 1-5") NODE="15:00" ;;
-              *) NODE="" ;;
+              "10 1 * * 1-5") TARGET_NODE="09:15" ;;
+              "15 1 * * 1-5") TARGET_NODE="09:20" ;;
+              "20 1 * * 1-5") TARGET_NODE="09:25" ;;
+              "30 1 * * 1-5") TARGET_NODE="09:35" ;;
+              "40 1 * * 1-5") TARGET_NODE="09:45" ;;
+              "50 1 * * 1-5") TARGET_NODE="09:55" ;;
+              "1 2 * * 1-5") TARGET_NODE="10:05" ;;
+              "10 2 * * 1-5") TARGET_NODE="10:15" ;;
+              "20 2 * * 1-5") TARGET_NODE="10:25" ;;
+              "30 2 * * 1-5") TARGET_NODE="10:35" ;;
+              "40 2 * * 1-5") TARGET_NODE="10:45" ;;
+              "50 2 * * 1-5") TARGET_NODE="10:55" ;;
+              "1 3 * * 1-5") TARGET_NODE="11:05" ;;
+              "10 3 * * 1-5") TARGET_NODE="11:15" ;;
+              "20 3 * * 1-5") TARGET_NODE="11:25" ;;
+              "1 5 * * 1-5") TARGET_NODE="13:05" ;;
+              "10 5 * * 1-5") TARGET_NODE="13:15" ;;
+              "20 5 * * 1-5") TARGET_NODE="13:25" ;;
+              "30 5 * * 1-5") TARGET_NODE="13:35" ;;
+              "40 5 * * 1-5") TARGET_NODE="13:45" ;;
+              "50 5 * * 1-5") TARGET_NODE="13:55" ;;
+              "1 6 * * 1-5") TARGET_NODE="14:05" ;;
+              "10 6 * * 1-5") TARGET_NODE="14:15" ;;
+              "20 6 * * 1-5") TARGET_NODE="14:25" ;;
+              "30 6 * * 1-5") TARGET_NODE="14:35" ;;
+              "40 6 * * 1-5") TARGET_NODE="14:45" ;;
+              "50 6 * * 1-5") TARGET_NODE="14:55" ;;
+              "55 6 * * 1-5") TARGET_NODE="15:00" ;;
+              *) TARGET_NODE="" ;;
             esac
+            MANUAL="false"
+          fi
+          if [ -z "$TARGET_NODE" ]; then
+            echo "Unable to resolve scheduled target"
+            exit 1
+          fi
+
+          NODE="$TARGET_NODE"
+          if [ "$MANUAL" = "false" ]; then
+            TARGET_HOUR="${TARGET_NODE%%:*}"
+            TARGET_MINUTE="${TARGET_NODE##*:}"
+            UTC_HOUR=$((10#$TARGET_HOUR - 8))
+            TARGET_EPOCH=$(date -u -d "$(date -u +%F) $(printf '%02d:%s' "$UTC_HOUR" "$TARGET_MINUTE"):00" +%s)
+            NOW_EPOCH=$(date -u +%s)
+            WAIT_SECONDS=$((TARGET_EPOCH - NOW_EPOCH))
+            MAX_ACCEPTABLE_LAG_SECONDS=540
+            if [ "$WAIT_SECONDS" -gt 0 ]; then
+              echo "Waiting ${WAIT_SECONDS}s for China node $TARGET_NODE"
+              sleep "$WAIT_SECONDS"
+            elif [ "$WAIT_SECONDS" -lt "-$MAX_ACCEPTABLE_LAG_SECONDS" ]; then
+              echo "Scheduled target $TARGET_NODE was missed; capturing the actual eligible node"
+              NODE=""
+            fi
           fi
           echo "node=$NODE" >> "$GITHUB_OUTPUT"
+          echo "scheduled_node=$TARGET_NODE" >> "$GITHUB_OUTPUT"
 
       - name: Capture node snapshot
         shell: bash
         env:
           CAPTURE_SECRET: ${{ secrets.CAPTURE_SECRET }}
           INPUT_DATE: ${{ github.event.inputs.date }}
-          NODE: ${{ steps.node.outputs.node }}
+          NODE: ${{ steps.target.outputs.node }}
+          SCHEDULED_NODE: ${{ steps.target.outputs.scheduled_node }}
         run: |
           URL="https://astock-proxy.vercel.app/api/capture-node"
           if [ -n "$NODE" ]; then
             URL="$URL?node=$NODE"
           fi
-          if [ -n "$INPUT_DATE" ]; then
-            if [[ "$URL" == *"?"* ]]; then
-              URL="$URL&date=$INPUT_DATE"
-            else
-              URL="$URL?date=$INPUT_DATE"
-            fi
+          if [[ "$URL" == *"?"* ]]; then
+            URL="$URL&scheduledNode=$SCHEDULED_NODE"
+          else
+            URL="$URL?scheduledNode=$SCHEDULED_NODE"
           fi
-          echo "Capturing scheduled China-time node ${NODE:-latest elapsed node}"
-          curl -fsS "$URL" \
+          if [ -n "$INPUT_DATE" ]; then
+            URL="$URL&date=$INPUT_DATE"
+          fi
+          echo "Scheduled target $SCHEDULED_NODE; capture node ${NODE:-latest elapsed node}"
+          curl -fsS --connect-timeout 10 --max-time 90 "$URL" \
             -H "x-capture-token: $CAPTURE_SECRET" \
             -H "Accept: application/json"

@@ -84,6 +84,75 @@ function normalizeNode(value) {
   return TRADING_NODES.includes(node) ? node : null;
 }
 
+function clockMinutes(value) {
+  const match = String(value || '').match(/^(\d{2}):(\d{2})$/);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour > 23 || minute > 59) return null;
+  return hour * 60 + minute;
+}
+
+function resolveCaptureWindow(currentHm, requestedNode = null, maxLagMinutes = 9) {
+  const currentMinutes = clockMinutes(currentHm);
+  if (currentMinutes === null) {
+    return {
+      success: false,
+      status: 'INVALID_ARGUMENT',
+      reason: 'Current China time must use HH:MM',
+      currentHm,
+    };
+  }
+
+  const hasRequestedNode = requestedNode !== null && requestedNode !== undefined && requestedNode !== '';
+  const normalizedRequestedNode = hasRequestedNode ? normalizeNode(requestedNode) : null;
+  if (hasRequestedNode && !normalizedRequestedNode) {
+    return {
+      success: false,
+      status: 'INVALID_ARGUMENT',
+      reason: 'Requested node is not a scheduled China-time trading node',
+      requestedNode,
+    };
+  }
+
+  const node = normalizedRequestedNode || [...TRADING_NODES]
+    .reverse()
+    .find(candidate => clockMinutes(candidate) <= currentMinutes);
+  if (!node) {
+    return {
+      success: false,
+      status: 'DATA_INSUFFICIENT',
+      reason: 'No trading node has elapsed yet',
+      currentHm,
+    };
+  }
+
+  const lagMinutes = currentMinutes - clockMinutes(node);
+  if (lagMinutes < 0 || lagMinutes > maxLagMinutes) {
+    return {
+      success: false,
+      status: 'DATA_INSUFFICIENT',
+      reason: lagMinutes < 0
+        ? 'Requested trading node is still in the future'
+        : 'Capture started after the allowed node window',
+      node,
+      currentHm,
+      lagMinutes,
+      maxLagMinutes,
+    };
+  }
+
+  return {
+    success: true,
+    status: 'OK',
+    node,
+    currentHm,
+    lagMinutes,
+    maxLagMinutes,
+    resolution: normalizedRequestedNode ? 'requested_node' : 'latest_elapsed_node',
+  };
+}
+
 function chinaClock(now = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Shanghai',
@@ -108,6 +177,7 @@ function timelineCoverage(timeline, requestedDate, now = new Date()) {
   const overwrittenNodes = [];
   for (const item of valid) {
     if (byNode.has(item.node)) overwrittenNodes.push(item.node);
+    if (Number(item.replacementCount || 0) > 0) overwrittenNodes.push(item.node);
     byNode.set(item.node, item);
   }
   const sorted = TRADING_NODES.map(node => byNode.get(node)).filter(Boolean);
@@ -250,6 +320,8 @@ module.exports = {
   validateSectorRows,
   summarizeCumulativeFlow,
   normalizeNode,
+  clockMinutes,
+  resolveCaptureWindow,
   chinaClock,
   timelineCoverage,
   validateDragonTigerRows,

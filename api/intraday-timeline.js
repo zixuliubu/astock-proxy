@@ -99,6 +99,22 @@ function incompleteComponents(timeline) {
     .map(name => ({ node: snapshot.node, component: name })));
 }
 
+function parseHashTimeline(raw) {
+  const values = Array.isArray(raw) ? raw : [];
+  const timeline = [];
+  const invalidFields = [];
+  for (let index = 0; index < values.length; index += 2) {
+    const field = values[index];
+    try {
+      const snapshot = JSON.parse(values[index + 1]);
+      timeline.push(snapshot);
+    } catch (error) {
+      invalidFields.push(field);
+    }
+  }
+  return { timeline, invalidFields };
+}
+
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
@@ -112,10 +128,26 @@ module.exports = async (req, res) => {
   }
 
   const date = String(req.query.date || chinaDate()).replace(/-/g, '');
-  const key = `astock:intraday:${date}`;
+  const legacyKey = `astock:intraday:${date}`;
+  const key = `astock:intraday:v2:${date}`;
   try {
-    const raw = await redisCommand(['GET', key]);
-    const timeline = raw ? JSON.parse(raw) : [];
+    const [legacyRaw, hashRaw] = await Promise.all([
+      redisCommand(['GET', legacyKey]),
+      redisCommand(['HGETALL', key]),
+    ]);
+    let legacyTimeline = [];
+    if (legacyRaw) {
+      try {
+        legacyTimeline = JSON.parse(legacyRaw);
+      } catch (error) {
+        legacyTimeline = [];
+      }
+    }
+    const parsedHash = parseHashTimeline(hashRaw);
+    const timeline = [
+      ...(Array.isArray(legacyTimeline) ? legacyTimeline : []),
+      ...parsedHash.timeline,
+    ];
     const coverage = timelineCoverage(timeline, date);
     const changes = buildChanges(coverage.sorted);
     const incomplete = incompleteComponents(coverage.sorted);
@@ -125,23 +157,31 @@ module.exports = async (req, res) => {
       status: complete ? 'OK' : 'DATA_INSUFFICIENT',
       date,
       key,
+      storageSchema: 'redis_hash_by_scheduled_node_v2_with_legacy_read',
+      storageKeys: { current: key, legacy: legacyKey },
       timeZone: 'Asia/Shanghai',
       scheduledNodes: TRADING_NODES,
       expectedNodes: coverage.expectedNodes,
       actualCapturedNodes: coverage.actualCapturedNodes,
       actualCaptureTimes: coverage.sorted.map(item => ({
         node: item.node,
+        scheduledTargetNode: item.scheduledTargetNode || item.node,
         chinaTime: item.chinaTime,
         capturedAt: item.capturedAt,
+        captureLagMinutes: item.captureLagMinutes ?? null,
+        nodeResolution: item.nodeResolution || null,
+        replacementCount: Number(item.replacementCount || 0),
+        replacedPreviousCapturedAt: item.replacedPreviousCapturedAt || null,
       })),
       missingNodes: coverage.missingNodes,
       missingReasons: coverage.missingNodes.map(node => ({
         node,
-        reason: 'No valid snapshot was stored for the scheduled China-time node',
+        reason: 'No valid on-time snapshot was stored; the scheduler did not run or the capture was rejected/failed',
       })),
       invalidStoredNodes: coverage.invalidStoredNodes,
+      invalidHashFields: parsedHash.invalidFields,
       incompleteComponents: incomplete,
-      duplicatePolicy: 'same scheduled node replaces the prior snapshot; replacement is reported by capture-node',
+      duplicatePolicy: 'same scheduled node replaces the prior snapshot; replacement count and prior capture time remain auditable',
       overwrittenNodes: coverage.overwrittenNodes,
       count: coverage.sorted.length,
       nodes: coverage.actualCapturedNodes,
@@ -157,3 +197,4 @@ module.exports = async (req, res) => {
 };
 
 module.exports.buildChanges = buildChanges;
+module.exports.parseHashTimeline = parseHashTimeline;

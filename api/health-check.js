@@ -1,6 +1,6 @@
 const { json, setCors, okBase } = require('./_stock-utils');
 
-const SERVER_VERSION = '1.8.0';
+const SERVER_VERSION = '1.8.1';
 const ENDPOINTS = [
   'quote', 'market-overview', 'sentiment', 'sector',
   'limit-up', 'broken-limit', 'limit-down', 'lianban-ladder',
@@ -32,7 +32,7 @@ function publicChecks() {
       dragonTigerSeatEm: 'no, on-demand Eastmoney seat endpoint with short cache',
     },
     capacityPolicy: {
-      defaultSampling: 'auction plus 10-minute China-time intraday nodes via GitHub Actions',
+      defaultSampling: 'auction plus 10-minute China-time intraday nodes via early-start GitHub Actions with capture-window validation',
       heavyModules: 'not deployed on Vercel; keep for Cloudflare/VPS later',
       fourthBatchDefault: 'only watchlist-auto-label enters daily-review-bundle; concept-members/sector-money-flow/limit-reason are on-demand',
       orderbookLite: 'on-demand only; max 8 symbols; default 5s cache; not Level-2; not all-market scan',
