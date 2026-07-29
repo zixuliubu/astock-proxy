@@ -26,6 +26,9 @@ const endpoints = [
   ['sector-money-flow', 'getSectorMoneyFlow', '获取板块资金流', { kind: 'concept/industry/both', top: '返回前N', sort: 'mainNet/changePct/amount' }],
   ['limit-reason', 'getLimitReason', '获取涨停原因归因增强', { date: 'YYYYMMDD', symbols: '可选股票代码', top: '返回前N', includeNews: 'true/false' }],
   ['watchlist-auto-label', 'getWatchlistAutoLabel', '观察池自动打标签', { group: '观察池组', symbols: '可选股票代码', context: 'pre/intraday/new', light: 'true/false' }],
+  ['system-radar-latest', 'getSystemRadarLatest', '获取主系统最新雷达帧', { token: 'SYSTEM_BRIDGE_READ_SECRET' }],
+  ['system-active-pool', 'getSystemActivePool', '获取主系统 Active Pool', { token: 'SYSTEM_BRIDGE_READ_SECRET' }],
+  ['system-data-health', 'getSystemDataHealth', '获取主系统数据健康', { token: 'SYSTEM_BRIDGE_READ_SECRET' }],
   ['health-check', 'getHealthCheck', '获取服务健康检查', { full: 'true/false' }],
 ];
 
@@ -76,7 +79,7 @@ const schema = {
   info: {
     title: 'A股实时行情API中转服务',
     description: '老大A股短线复盘系统：行情、涨停池、炸板池、连板梯队、板块资金流、观察池标签、盘中节点、复盘增强包与 MCP 工具入口。',
-    version: '1.7.0',
+    version: '1.9.0',
   },
   servers: [{ url: 'https://astock-proxy.vercel.app' }],
   paths: Object.fromEntries(endpoints.map(e => [`/api/${e[0]}`, pathFor(e)])),

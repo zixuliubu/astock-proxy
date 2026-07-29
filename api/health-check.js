@@ -1,6 +1,6 @@
 const { json, setCors, okBase } = require('./_stock-utils');
 
-const SERVER_VERSION = '1.8.1';
+const SERVER_VERSION = '1.9.0';
 const ENDPOINTS = [
   'quote', 'market-overview', 'sentiment', 'sector',
   'limit-up', 'broken-limit', 'limit-down', 'lianban-ladder',
@@ -10,6 +10,7 @@ const ENDPOINTS = [
   'stock-concepts', 'stock-popularity', 'stock-capital-flow', 'stock-news', 'stock-kline',
   'review-rules', 'concept-members', 'sector-money-flow', 'limit-reason', 'watchlist-auto-label',
   'orderbook-lite', 'watchlist-orderbook',
+  'system-radar-latest', 'system-active-pool', 'system-data-health',
   'openapi', 'health-check',
 ];
 
@@ -30,6 +31,7 @@ function publicChecks() {
       dragonTigerDebug: 'no, diagnostic read-only endpoint with short cache',
       dragonTigerSeatCodeProbe: 'no, diagnostic read-only endpoint with short cache',
       dragonTigerSeatEm: 'no, on-demand Eastmoney seat endpoint with short cache',
+      systemBridge: 'read-only Redis snapshots exported by AI-Stock-System; no Provider or detector execution',
     },
     capacityPolicy: {
       defaultSampling: 'auction plus 10-minute China-time intraday nodes via early-start GitHub Actions with capture-window validation',
@@ -47,6 +49,7 @@ function publicChecks() {
       UPSTASH_REDIS_REST_URL: Boolean(process.env.UPSTASH_REDIS_REST_URL),
       UPSTASH_REDIS_REST_TOKEN: Boolean(process.env.UPSTASH_REDIS_REST_TOKEN),
       ASTOCK_BASE_URL: Boolean(process.env.ASTOCK_BASE_URL),
+      SYSTEM_BRIDGE_READ_SECRET: Boolean(process.env.SYSTEM_BRIDGE_READ_SECRET || process.env.CAPTURE_SECRET),
     },
     secretSafety: 'secret values are never returned',
   };

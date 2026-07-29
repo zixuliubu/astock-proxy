@@ -1,6 +1,6 @@
 const ASTOCK_BASE_URL = process.env.ASTOCK_BASE_URL || 'https://astock-proxy.vercel.app';
 const SERVER_NAME = 'astock-mcp';
-const SERVER_VERSION = '1.8.0';
+const SERVER_VERSION = '1.9.0';
 const PRIVATE_MCP_PATH = '/mcp-laoda-20260708-x7k29q';
 
 function schema(props = {}, required = []) { return { type: 'object', properties: props, required, additionalProperties: false }; }
@@ -41,6 +41,9 @@ const tools = [
   tool('get_sector_money_flow', '获取板块资金流', '查询东方财富行业/概念板块资金流榜单。用于验证主线是否有容量资金参与；默认不进入10分钟自动采样。', schema({ kind: { type: 'string', description: 'concept、industry、both，默认 concept。' }, top: { type: 'integer', description: '返回前N，默认30，最多60。' }, sort: { type: 'string', description: 'mainNet、changePct、amount，默认 mainNet。' } })),
   tool('get_limit_reason', '获取涨停原因归因增强', '基于涨停池原因、行业、概念标签和可选新闻公告生成涨停原因证据。用于题材归因增强和主线确认。', schema({ date: { type: 'string', description: '日期 YYYYMMDD。' }, symbols: { type: 'string', description: '可选，只看指定股票。' }, top: { type: 'integer', description: '默认30，最多50。' }, includeNews: { type: 'boolean', description: '是否附加新闻公告催化，默认 false。' } })),
   tool('get_watchlist_auto_label', '观察池自动打标签', '自动给观察池或自定义股票打标签：盘前固定、盘中新增、确认用、可参与观察、风险锚、降级删除。用于避免盘中马后炮加票。', schema({ group: { type: 'string', description: '观察池组，默认 default。' }, symbols: { type: 'string', description: '自定义股票代码。' }, context: { type: 'string', description: 'pre、intraday、new，默认 pre。' }, light: { type: 'boolean', description: '轻量模式，只用观察池数据，默认 false。' } })),
+  tool('get_system_radar_latest', '获取主系统最新雷达帧', '读取 AI-Stock-System 已生成的最新雷达 JSON；不触发行情请求、不重跑检测器。缺失、过期或内部数据健康失败时返回结构化非成功状态。', emptyInputSchema()),
+  tool('get_system_active_pool', '获取主系统 Active Pool', '读取 AI-Stock-System Active Pool Shadow 的最新 state 与 sidecar health；不修改观察池、不调用 Planner 或交易框架。', emptyInputSchema()),
+  tool('get_system_data_health', '获取主系统数据健康', '读取 AI-Stock-System 雷达 Data Health、行情双源核验和 Active Pool sidecar health 的最新快照。冲突、缺失或过期不会伪装成功。', emptyInputSchema()),
 ];
 
 function json(res, status, body) { res.statusCode = status; res.setHeader('Content-Type', 'application/json; charset=utf-8'); res.end(JSON.stringify(body)); }
@@ -100,6 +103,9 @@ async function callTool(name, args = {}) {
     get_sector_money_flow: ['/api/sector-money-flow', { kind: args.kind, top: args.top, sort: args.sort }],
     get_limit_reason: ['/api/limit-reason', { date: args.date, symbols: args.symbols, top: args.top, includeNews: args.includeNews === true ? 'true' : undefined }],
     get_watchlist_auto_label: ['/api/watchlist-auto-label', { group: args.group, symbols: args.symbols, context: args.context, light: args.light === true ? 'true' : undefined }],
+    get_system_radar_latest: ['/api/system-radar-latest', { token: process.env.SYSTEM_BRIDGE_READ_SECRET || process.env.CAPTURE_SECRET }],
+    get_system_active_pool: ['/api/system-active-pool', { token: process.env.SYSTEM_BRIDGE_READ_SECRET || process.env.CAPTURE_SECRET }],
+    get_system_data_health: ['/api/system-data-health', { token: process.env.SYSTEM_BRIDGE_READ_SECRET || process.env.CAPTURE_SECRET }],
   };
   if (!map[name]) throw new Error(`Unknown tool: ${name}`);
   return fetchJson(map[name][0], map[name][1]);
