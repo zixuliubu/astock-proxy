@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const {
   TRADING_NODES,
   normalizeNode,
+  resolveCaptureWindow,
   summarizeCumulativeFlow,
   selectDragonTigerSeats,
   summarizeDragonTigerSeats,
@@ -13,6 +14,7 @@ const {
   validateReviewMinimum,
   validateSectorRows,
 } = require('../api/_data-contracts');
+const { parseHashTimeline } = require('../api/intraday-timeline');
 
 const wan = value => value === null || value === undefined ? null : Number((value / 10000).toFixed(2));
 const yi = value => value === null || value === undefined ? null : Number((value / 100000000).toFixed(3));
@@ -54,12 +56,39 @@ test('timeline ignores invalid UTC labels, reports missing scheduled nodes, and 
     { node: '04:42' },
     { node: '09:15', capturedAt: 'a' },
     { node: '09:15', capturedAt: 'b' },
-    { node: '09:35' },
+    { node: '09:35', replacementCount: 1 },
   ], '20260728', now);
   assert.deepEqual(coverage.invalidStoredNodes, ['04:42']);
-  assert.deepEqual(coverage.overwrittenNodes, ['09:15']);
+  assert.deepEqual(coverage.overwrittenNodes, ['09:15', '09:35']);
   assert.ok(coverage.missingNodes.includes('09:20'));
   assert.equal(coverage.sorted.find(x => x.node === '09:15').capturedAt, 'b');
+});
+
+test('capture window uses actual China time and rejects stale scheduled labels', () => {
+  assert.deepEqual(resolveCaptureWindow('09:22'), {
+    success: true,
+    status: 'OK',
+    node: '09:20',
+    currentHm: '09:22',
+    lagMinutes: 2,
+    maxLagMinutes: 9,
+    resolution: 'latest_elapsed_node',
+  });
+  assert.equal(resolveCaptureWindow('10:04').node, '09:55');
+  assert.equal(resolveCaptureWindow('12:00').status, 'DATA_INSUFFICIENT');
+  assert.equal(resolveCaptureWindow('17:37', '15:00').status, 'DATA_INSUFFICIENT');
+  assert.equal(resolveCaptureWindow('09:14').status, 'DATA_INSUFFICIENT');
+  assert.equal(resolveCaptureWindow('09:20', '09:25').status, 'DATA_INSUFFICIENT');
+  assert.equal(resolveCaptureWindow('09:20', '04:42').status, 'INVALID_ARGUMENT');
+});
+
+test('timeline parses atomic Redis hash snapshots and isolates corrupt fields', () => {
+  const parsed = parseHashTimeline([
+    '09:15', JSON.stringify({ node: '09:15', capturedAt: 'a' }),
+    '09:20', '{invalid',
+  ]);
+  assert.deepEqual(parsed.timeline, [{ node: '09:15', capturedAt: 'a' }]);
+  assert.deepEqual(parsed.invalidFields, ['09:20']);
 });
 
 test('dragon-tiger list rejects missing deal amounts but accepts verified one-sided rows', () => {
