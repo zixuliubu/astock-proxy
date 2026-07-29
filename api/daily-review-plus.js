@@ -250,7 +250,7 @@ module.exports = async (req, res) => {
 
   try {
     const value = await buildPlus(req);
-    return json(res, 200, value);
+    return json(res, value?.success === true ? 200 : 503, value);
   } catch (e) {
     return json(res, 500, { success: false, mode: 'daily_review_bundle_plus_v1', error: e.message, updateTime: new Date().toISOString() });
   }
