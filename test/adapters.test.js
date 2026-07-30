@@ -6,7 +6,7 @@ const dragonTiger = require('../api/dragon-tiger');
 const quote = require('../api/quote');
 const watchlist = require('../api/watchlist');
 const dragonTigerDetail = require('../api/dragon-tiger-detail');
-const { reconcileTextRows } = require('../api/_stock-utils');
+const { num, reconcileTextRows } = require('../api/_stock-utils');
 
 function mockResponse(status, payload) {
   return {
@@ -21,6 +21,13 @@ test('stock-capital-flow parser preserves Eastmoney yuan fields', () => {
   assert.equal(row.mainNetYuan, 120000000);
   assert.equal(row.mainNetWan, 12000);
   assert.equal(stockFlow.summarize([row]).totalMainYi, 1.2);
+});
+
+test('numeric normalization preserves missing values instead of fabricating zero', () => {
+  assert.equal(num(null), null);
+  assert.equal(num(undefined), null);
+  assert.equal(num(''), null);
+  assert.equal(num('0'), 0);
 });
 
 test('sector adapter maps AKShare-verified amount fields', () => {
