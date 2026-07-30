@@ -1,6 +1,20 @@
-const { json, setCors, parseSymbols, secid, buildUrl, requestJson, cached, okBase, wan, yi, num } = require('./_stock-utils');
+const {
+  json, setCors, parseSymbols, secid, buildUrl, requestJson, requestJsonFallback,
+  cached, okBase, wan, yi, num,
+} = require('./_stock-utils');
 const { failure, summarizeCumulativeFlow } = require('./_data-contracts');
 const { sinaQuote, tencentQuote, mergeQuotes } = require('./quote');
+const EASTMONEY_TOKEN = 'b2884a393a59ad64002292a3e90d46a5';
+const MINUTE_HOSTS = [
+  ['eastmoney_push2', 'https://push2.eastmoney.com'],
+  ['eastmoney_push2_79', 'https://79.push2.eastmoney.com'],
+  ['eastmoney_push2_17', 'https://17.push2.eastmoney.com'],
+];
+const DAILY_HOSTS = [
+  ['eastmoney_push2his_33', 'https://33.push2his.eastmoney.com'],
+  ['eastmoney_push2his_63', 'https://63.push2his.eastmoney.com'],
+  ['eastmoney_push2his', 'https://push2his.eastmoney.com'],
+];
 
 function parseFlowLine(line, mode) {
   const p = String(line || '').split(',');
@@ -24,28 +38,56 @@ function summarize(rows) {
 }
 
 async function fetchMinuteFlow(code) {
-  const url = buildUrl('https://push2.eastmoney.com/api/qt/stock/fflow/kline/get', {
+  const params = {
     secid: secid(code),
+    lmt: 0,
     klt: 1,
     fields1: 'f1,f2,f3,f7',
     fields2: 'f51,f52,f53,f54,f55,f56,f57',
-    ut: 'b2884a393a59ad64002292a3e90d46a5',
+    ut: EASTMONEY_TOKEN,
+    _: Date.now(),
+  };
+  const result = await requestJsonFallback(MINUTE_HOSTS.map(([source, host]) => ({
+    source,
+    url: buildUrl(`${host}/api/qt/stock/fflow/kline/get`, params),
+  })), {
+    headers: {
+      Referer: 'https://data.eastmoney.com/zjlx/',
+      Origin: 'https://data.eastmoney.com',
+    },
+    timeoutMs: 4000,
+    accept: payload => Array.isArray(payload?.data?.klines) && payload.data.klines.length > 0,
   });
-  const data = await requestJson(url, { headers: { Referer: 'https://data.eastmoney.com/zjlx/' }, timeoutMs: 10000 });
-  return (data?.data?.klines || []).map(x => parseFlowLine(x, 'minute')).filter(Boolean);
+  return {
+    rows: result.data.data.klines.map(x => parseFlowLine(x, 'minute')).filter(Boolean),
+    source: result.source,
+    attempts: result.attempts,
+  };
 }
 
 async function fetchDailyFlow(code, limit = 20) {
-  const url = buildUrl('https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get', {
+  const params = {
     secid: secid(code),
     klt: 101,
     fields1: 'f1,f2,f3,f7',
     fields2: 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65',
     lmt: Math.min(Math.max(Number(limit || 20), 1), 120),
-    ut: 'b2884a393a59ad64002292a3e90d46a5',
+    ut: EASTMONEY_TOKEN,
+    _: Date.now(),
+  };
+  const result = await requestJsonFallback(DAILY_HOSTS.map(([source, host]) => ({
+    source,
+    url: buildUrl(`${host}/api/qt/stock/fflow/daykline/get`, params),
+  })), {
+    headers: { Referer: 'https://data.eastmoney.com/zjlx/' },
+    timeoutMs: 4500,
+    accept: payload => Array.isArray(payload?.data?.klines) && payload.data.klines.length > 0,
   });
-  const data = await requestJson(url, { headers: { Referer: 'https://data.eastmoney.com/zjlx/' }, timeoutMs: 12000 });
-  return (data?.data?.klines || []).map(x => parseFlowLine(x, 'daily')).filter(Boolean);
+  return {
+    rows: result.data.data.klines.map(x => parseFlowLine(x, 'daily')).filter(Boolean),
+    source: result.source,
+    attempts: result.attempts,
+  };
 }
 
 async function fetchTurnover(code) {
@@ -75,18 +117,56 @@ async function fetchTurnover(code) {
 }
 
 async function fetchForCode(code, range, dailyLimit) {
-  const turnover = await fetchTurnover(code).catch(() => ({ amountYuan: null, source: null }));
+  const tasks = {
+    turnover: fetchTurnover(code),
+  };
+  if (range === 'minute' || range === 'both') tasks.minute = fetchMinuteFlow(code);
+  if (range === 'daily' || range === 'both') tasks.daily = fetchDailyFlow(code, dailyLimit);
+  const names = Object.keys(tasks);
+  const settled = await Promise.allSettled(Object.values(tasks));
+  const results = Object.fromEntries(names.map((name, index) => [name, settled[index]]));
+  const turnover = results.turnover.status === 'fulfilled'
+    ? results.turnover.value
+    : { amountYuan: null, source: null };
   const out = { code, turnoverYuan: turnover.amountYuan, turnoverSource: turnover.source };
-  if (range === 'minute' || range === 'both') {
-    const rows = await fetchMinuteFlow(code);
-    out.minute = { summary: summarize(rows), rows: rows.slice(-30) };
+  const flowErrors = {};
+  if (results.minute?.status === 'fulfilled') {
+    const value = results.minute.value;
+    out.minute = {
+      source: value.source,
+      summary: summarize(value.rows),
+      rows: value.rows.slice(-30),
+      attempts: value.attempts,
+    };
+  } else if (results.minute) {
+    flowErrors.minute = String(results.minute.reason?.message || results.minute.reason);
+    out.minute = null;
   }
-  if (range === 'daily' || range === 'both') {
-    const rows = await fetchDailyFlow(code, dailyLimit);
-    out.daily = { summary: summarize(rows), rows: rows.slice(-dailyLimit) };
+  if (results.daily?.status === 'fulfilled') {
+    const value = results.daily.value;
+    out.daily = {
+      source: value.source,
+      summary: summarize(value.rows),
+      rows: value.rows.slice(-dailyLimit),
+      attempts: value.attempts,
+    };
+  } else if (results.daily) {
+    flowErrors.daily = String(results.daily.reason?.message || results.daily.reason);
+    out.daily = null;
   }
+  if (Object.keys(flowErrors).length) out.flowErrors = flowErrors;
   const main = out.minute?.summary?.latest?.mainNetYuan ?? out.daily?.summary?.latest?.mainNetYuan;
-  if (out.minute && !(out.turnoverYuan > 0)) {
+  const requestedSlicesAvailable = (
+    (range === 'minute' && out.minute?.summary?.latest)
+    || (range === 'daily' && out.daily?.summary?.latest)
+    || (range === 'both' && out.minute?.summary?.latest && out.daily?.summary?.latest)
+  );
+  if (!requestedSlicesAvailable) {
+    out.validation = failure('DATA_INSUFFICIENT', 'One or more requested flow ranges are unavailable', {
+      range,
+      flowErrors,
+    });
+  } else if (out.minute && !(out.turnoverYuan > 0)) {
     out.validation = failure('DATA_INSUFFICIENT', 'Current stock turnover is unavailable for flow reconciliation');
   } else if (num(main) !== null && out.turnoverYuan && Math.abs(main) > out.turnoverYuan * 1.05) {
     out.validation = failure('CONFLICT', 'Main net flow exceeds the stock turnover', {
@@ -109,15 +189,19 @@ module.exports = async (req, res) => {
   const diagnostics = {};
   const data = [];
 
-  for (const code of symbols) {
+  const results = await Promise.all(symbols.map(async code => {
     try {
-      const key = `stock-flow:v2:${code}:${range}:${dailyLimit}`;
+      const key = `stock-flow:v3:${code}:${range}:${dailyLimit}`;
       const { value, cached: fromCache } = await cached(key, ttlMs, () => fetchForCode(code, range, dailyLimit));
-      data.push({ ...value, cached: fromCache });
+      return { ...value, cached: fromCache };
     } catch (err) {
       diagnostics[code] = String(err?.message || err);
-      data.push({ code, status: 'UPSTREAM_FAILED', error: diagnostics[code], minute: null, daily: null });
+      return { code, status: 'UPSTREAM_FAILED', error: diagnostics[code], minute: null, daily: null };
     }
+  }));
+  data.push(...results);
+  for (const item of results) {
+    if (item.flowErrors) diagnostics[item.code] = item.flowErrors;
   }
 
   const failures = data.filter(item => item.error || item.validation);
@@ -127,8 +211,8 @@ module.exports = async (req, res) => {
     ...okBase({
       success,
       status: failures.some(item => item.validation?.status === 'CONFLICT') ? 'CONFLICT' : success ? 'OK' : 'DATA_INSUFFICIENT',
-      mode: 'stock_capital_flow_v2',
-      source: 'eastmoney_push2_fflow_akshare_contract',
+      mode: 'stock_capital_flow_v3',
+      source: 'eastmoney_push2_multi_host_fflow_mature_library_contract',
       range,
       count: data.length,
       data,
@@ -140,3 +224,5 @@ module.exports = async (req, res) => {
 
 module.exports.parseFlowLine = parseFlowLine;
 module.exports.summarize = summarize;
+module.exports.fetchMinuteFlow = fetchMinuteFlow;
+module.exports.fetchForCode = fetchForCode;

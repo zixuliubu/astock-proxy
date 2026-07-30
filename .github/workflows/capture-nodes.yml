@@ -13,8 +13,8 @@ on:
         type: string
   schedule:
     # Cron is UTC and starts 4-5 minutes early. The runner waits for the target
-    # node; if GitHub starts more than 9 minutes late, the API resolves the
-    # actual elapsed node instead of writing stale data under a false label.
+    # node; if GitHub starts more than 9 minutes late, the workflow skips that
+    # target instead of writing stale data under a false label.
     - cron: '10 1 * * 1-5'
     - cron: '15 1 * * 1-5'
     - cron: '20 1 * * 1-5'
@@ -59,6 +59,7 @@ jobs:
           if [ -n "$INPUT_NODE" ]; then
             TARGET_NODE="$INPUT_NODE"
             MANUAL="true"
+            CAPTURE="true"
           else
             case "$SCHEDULE" in
               "10 1 * * 1-5") TARGET_NODE="09:15" ;;
@@ -92,6 +93,7 @@ jobs:
               *) TARGET_NODE="" ;;
             esac
             MANUAL="false"
+            CAPTURE="true"
           fi
           if [ -z "$TARGET_NODE" ]; then
             echo "Unable to resolve scheduled target"
@@ -111,14 +113,17 @@ jobs:
               echo "Waiting ${WAIT_SECONDS}s for China node $TARGET_NODE"
               sleep "$WAIT_SECONDS"
             elif [ "$WAIT_SECONDS" -lt "-$MAX_ACCEPTABLE_LAG_SECONDS" ]; then
-              echo "Scheduled target $TARGET_NODE was missed; capturing the actual eligible node"
+              echo "Scheduled target $TARGET_NODE was missed; refusing to relabel a later node"
               NODE=""
+              CAPTURE="false"
             fi
           fi
           echo "node=$NODE" >> "$GITHUB_OUTPUT"
           echo "scheduled_node=$TARGET_NODE" >> "$GITHUB_OUTPUT"
+          echo "capture=$CAPTURE" >> "$GITHUB_OUTPUT"
 
       - name: Capture node snapshot
+        if: steps.target.outputs.capture == 'true'
         shell: bash
         env:
           CAPTURE_SECRET: ${{ secrets.CAPTURE_SECRET }}
@@ -139,6 +144,7 @@ jobs:
             URL="$URL&date=$INPUT_DATE"
           fi
           echo "Scheduled target $SCHEDULED_NODE; capture node ${NODE:-latest elapsed node}"
-          curl -fsS --connect-timeout 10 --max-time 90 "$URL" \
+          curl -fsS --connect-timeout 10 --max-time 90 \
+            --retry 2 --retry-delay 10 --retry-all-errors "$URL" \
             -H "x-capture-token: $CAPTURE_SECRET" \
             -H "Accept: application/json"

@@ -126,6 +126,30 @@ async function requestJson(url, options = {}) {
   return parseMaybeJsonp(text);
 }
 
+async function requestJsonFallback(candidates, options = {}) {
+  const attempts = [];
+  for (const candidate of candidates) {
+    const item = typeof candidate === 'string'
+      ? { source: new URL(candidate).host, url: candidate }
+      : candidate;
+    try {
+      const data = await requestJson(item.url, options);
+      if (typeof options.accept === 'function' && !options.accept(data)) {
+        throw new Error('upstream payload is empty or invalid');
+      }
+      return { data, source: item.source, attempts };
+    } catch (error) {
+      attempts.push({
+        source: item.source,
+        error: error?.name === 'AbortError' ? 'timeout' : String(error?.message || error),
+      });
+    }
+  }
+  const error = new Error(attempts.map(item => `${item.source}: ${item.error}`).join('; ') || 'No upstream candidates');
+  error.attempts = attempts;
+  throw error;
+}
+
 function buildUrl(base, params = {}) {
   const url = new URL(base);
   Object.entries(params).forEach(([k, v]) => {
@@ -165,6 +189,7 @@ module.exports = {
   parseMaybeJsonp,
   requestText,
   requestJson,
+  requestJsonFallback,
   buildUrl,
   cached,
   okBase,

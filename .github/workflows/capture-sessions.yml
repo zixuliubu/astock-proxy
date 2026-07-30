@@ -77,7 +77,8 @@ jobs:
 
             URL="https://astock-proxy.vercel.app/api/capture-node?node=$NODE&scheduledNode=$NODE&date=$CHINA_DATE"
             echo "Capturing China node $NODE"
-            if ! curl -fsS --connect-timeout 10 --max-time 90 "$URL" \
+            if ! curl -fsS --connect-timeout 10 --max-time 90 \
+              --retry 2 --retry-delay 10 --retry-all-errors "$URL" \
               -H "x-capture-token: $CAPTURE_SECRET" \
               -H "Accept: application/json"; then
               echo "Capture failed for China node $NODE"

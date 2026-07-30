@@ -14,11 +14,21 @@ function formatDate(date) {
 }
 
 function number(value) {
+  if (value === null || value === undefined || value === '') return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
 function normalize(row) {
+  const amountFields = {
+    buyAmount: number(row.BILLBOARD_BUY_AMT),
+    sellAmount: number(row.BILLBOARD_SELL_AMT),
+    netAmount: number(row.BILLBOARD_NET_AMT),
+    amount: number(row.BILLBOARD_DEAL_AMT),
+  };
+  const missingAmountFields = Object.entries(amountFields)
+    .filter(([, value]) => value === null)
+    .map(([field]) => field);
   return {
     tradeDate: row.TRADE_DATE,
     code: String(row.SECURITY_CODE || ''),
@@ -27,38 +37,63 @@ function normalize(row) {
     changePct: number(row.CHANGE_RATE),
     reason: row.EXPLANATION || row.EXPLAIN || '',
     interpretation: row.EXPLAIN || '',
-    buyAmount: number(row.BILLBOARD_BUY_AMT),
-    sellAmount: number(row.BILLBOARD_SELL_AMT),
-    netAmount: number(row.BILLBOARD_NET_AMT),
-    amount: number(row.BILLBOARD_DEAL_AMT),
+    ...amountFields,
     marketAmount: number(row.ACCUM_AMOUNT),
     turnover: number(row.TURNOVERRATE),
+    missingAmountFields,
+    missingReason: missingAmountFields.length
+      ? `upstream fields unavailable: ${missingAmountFields.join(',')}`
+      : '',
   };
 }
 
 async function fetchDragonTiger(date) {
   const tradeDate = formatDate(date);
-  const url = buildUrl('https://datacenter-web.eastmoney.com/api/data/v1/get', {
+  const columns = [
+    'SECURITY_CODE', 'SECUCODE', 'SECURITY_NAME_ABBR', 'TRADE_DATE', 'EXPLAIN',
+    'CLOSE_PRICE', 'CHANGE_RATE', 'BILLBOARD_NET_AMT', 'BILLBOARD_BUY_AMT',
+    'BILLBOARD_SELL_AMT', 'BILLBOARD_DEAL_AMT', 'ACCUM_AMOUNT',
+    'TURNOVERRATE', 'EXPLANATION',
+  ].join(',');
+  const baseParams = {
     sortColumns: 'SECURITY_CODE,TRADE_DATE',
     sortTypes: '1,-1',
     pageSize: 5000,
     pageNumber: 1,
     reportName: 'RPT_DAILYBILLBOARD_DETAILSNEW',
-    columns: [
-      'SECURITY_CODE', 'SECUCODE', 'SECURITY_NAME_ABBR', 'TRADE_DATE', 'EXPLAIN',
-      'CLOSE_PRICE', 'CHANGE_RATE', 'BILLBOARD_NET_AMT', 'BILLBOARD_BUY_AMT',
-      'BILLBOARD_SELL_AMT', 'BILLBOARD_DEAL_AMT', 'ACCUM_AMOUNT',
-      'TURNOVERRATE', 'EXPLANATION',
-    ].join(','),
     source: 'WEB',
     client: 'WEB',
     filter: `(TRADE_DATE='${tradeDate}')`,
-  });
-  const payload = await requestJson(url, {
-    headers: { Referer: 'https://data.eastmoney.com/stock/tradedetail.html' },
-    timeoutMs: 12000,
-  });
-  return (payload?.result?.data || []).map(normalize);
+  };
+  const attempts = [];
+  let sawValidEmpty = false;
+  for (const [variant, selectedColumns] of [['akshare_columns', columns], ['all_columns', 'ALL']]) {
+    try {
+      const url = buildUrl('https://datacenter-web.eastmoney.com/api/data/v1/get', {
+        ...baseParams,
+        columns: selectedColumns,
+        _: Date.now(),
+      });
+      const payload = await requestJson(url, {
+        headers: { Referer: 'https://data.eastmoney.com/stock/tradedetail.html' },
+        timeoutMs: 8000,
+      });
+      const rows = payload?.result?.data;
+      if (!Array.isArray(rows)) throw new Error('Eastmoney result.data is unavailable');
+      attempts.push({ variant, rawCount: rows.length });
+      if (rows.length) {
+        return { data: rows.map(normalize), attempts, sourceState: 'OK' };
+      }
+      sawValidEmpty = true;
+    } catch (error) {
+      attempts.push({ variant, error: String(error?.message || error) });
+    }
+  }
+  return {
+    data: [],
+    attempts,
+    sourceState: sawValidEmpty ? 'EMPTY_OR_NOT_PUBLISHED' : 'UPSTREAM_FAILED',
+  };
 }
 
 module.exports = async (req, res) => {
@@ -68,21 +103,36 @@ module.exports = async (req, res) => {
   if (req.method !== 'GET') return res.status(405).json(failure('METHOD_NOT_ALLOWED', 'Method not allowed'));
 
   try {
-    const data = await fetchDragonTiger(req.query.date);
+    const result = await fetchDragonTiger(req.query.date);
+    const data = result.data;
+    if (result.sourceState !== 'OK') {
+      const code = result.sourceState === 'UPSTREAM_FAILED' ? 'UPSTREAM_FAILED' : 'DATA_INSUFFICIENT';
+      const message = result.sourceState === 'UPSTREAM_FAILED'
+        ? 'Dragon-tiger upstream is unavailable'
+        : 'Dragon-tiger list is empty or has not been published for the requested date';
+      return res.status(503).json({
+        ...failure(code, message, { attempts: result.attempts }),
+        mode: 'dragon_tiger_list_v3',
+        date: formatDate(req.query.date),
+        sourceState: result.sourceState,
+        data: [],
+      });
+    }
     const validation = validateDragonTigerRows(data);
     if (!validation.success) {
       return res.status(503).json({
         ...validation,
-        mode: 'dragon_tiger_list_v2',
+        mode: 'dragon_tiger_list_v3',
         date: formatDate(req.query.date),
         data,
+        diagnostics: { attempts: result.attempts },
       });
     }
     const sorted = [...data].sort((a, b) => Math.abs(b.netAmount) - Math.abs(a.netAmount));
     return res.status(200).json({
       success: true,
       status: 'OK',
-      mode: 'dragon_tiger_list_v2',
+      mode: 'dragon_tiger_list_v3',
       source: 'eastmoney_RPT_DAILYBILLBOARD_DETAILSNEW_akshare_contract',
       count: sorted.length,
       data: sorted,
@@ -90,6 +140,7 @@ module.exports = async (req, res) => {
         topNetBuy: [...data].sort((a, b) => b.netAmount - a.netAmount).slice(0, 10),
         topNetSell: [...data].sort((a, b) => a.netAmount - b.netAmount).slice(0, 10),
       },
+      diagnostics: { attempts: result.attempts },
       updateTime: new Date().toISOString(),
     });
   } catch (err) {

@@ -155,6 +155,17 @@ test('dragon-tiger detail selects one trade id and does not double count buy/sel
   assert.equal(summary.aggregation, 'authoritative_list_row_totals_with_selected_trade_id_top5_breakdown');
 });
 
+test('dragon-tiger detail refuses to aggregate seats without a verified trade id', () => {
+  assert.deepEqual(selectDragonTigerSeats(
+    [{ tradeId: 'A', buyAmount: 100 }],
+    [{ tradeId: 'B', sellAmount: 80 }],
+    '',
+  ), {
+    buySeats: [],
+    sellSeats: [],
+  });
+});
+
 test('daily review sector compaction uses normalized fields without undefined identifiers', () => {
   const compact = compactReviewSector({
     name: '食品饮料',
