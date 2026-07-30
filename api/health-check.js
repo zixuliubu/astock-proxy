@@ -1,6 +1,6 @@
 const { json, setCors, okBase } = require('./_stock-utils');
 
-const SERVER_VERSION = '1.9.0';
+const SERVER_VERSION = '1.10.0';
 const ENDPOINTS = [
   'quote', 'market-overview', 'sentiment', 'sector',
   'limit-up', 'broken-limit', 'limit-down', 'lianban-ladder',

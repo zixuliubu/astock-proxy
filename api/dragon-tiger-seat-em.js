@@ -18,8 +18,9 @@ function formatDate(date) {
 }
 
 function n(v) {
+  if (v === null || v === undefined || v === '') return null;
   const x = Number(v);
-  return Number.isFinite(x) ? x : 0;
+  return Number.isFinite(x) ? x : null;
 }
 
 function pick(row, keys, fallback = '') {
@@ -47,10 +48,17 @@ function seatName(row) {
 
 function normalizeSeat(row, side, index) {
   const name = seatName(row);
-  const buyAmount = n(pick(row, ['BUY', 'BUY_AMT', 'BUY_AMOUNT', 'BILLBOARD_BUY_AMT'], 0));
-  const sellAmount = n(pick(row, ['SELL', 'SELL_AMT', 'SELL_AMOUNT', 'BILLBOARD_SELL_AMT'], 0));
+  const buyAmount = n(pick(row, ['BUY', 'BUY_AMT', 'BUY_AMOUNT', 'BILLBOARD_BUY_AMT'], null));
+  const sellAmount = n(pick(row, ['SELL', 'SELL_AMT', 'SELL_AMOUNT', 'BILLBOARD_SELL_AMT'], null));
   const netRaw = pick(row, ['NET_AMT', 'NET', 'NET_AMOUNT', 'BILLBOARD_NET_AMT'], null);
-  const netAmount = netRaw === null ? buyAmount - sellAmount : n(netRaw);
+  const netAmount = netRaw === null && buyAmount !== null && sellAmount !== null
+    ? buyAmount - sellAmount
+    : n(netRaw);
+  const missingAmountFields = [
+    ['buyAmount', buyAmount],
+    ['sellAmount', sellAmount],
+    ['netAmount', netAmount],
+  ].filter(([, value]) => value === null).map(([field]) => field);
   const tags = tagSeat(name);
   return {
     rank: index + 1,
@@ -66,8 +74,9 @@ function normalizeSeat(row, side, index) {
     buyAmountYi: yi(buyAmount),
     sellAmountYi: yi(sellAmount),
     netAmountYi: yi(netAmount),
-    buyRatio: n(pick(row, ['BUY_RATIO', 'BUY_RATE'], 0)),
-    sellRatio: n(pick(row, ['SELL_RATIO', 'SELL_RATE'], 0)),
+    buyRatio: n(pick(row, ['BUY_RATIO', 'BUY_RATE'], null)),
+    sellRatio: n(pick(row, ['SELL_RATIO', 'SELL_RATE'], null)),
+    missingAmountFields,
     style: tags.style,
     tags: tags.tags,
     confidence: tags.confidence,
@@ -98,22 +107,24 @@ async function fetchSide({ tradeDate, code, side }) {
     headers: { Referer: `https://data.eastmoney.com/stock/lhb/${code}.html` },
   });
   const rows = data && data.result && Array.isArray(data.result.data) ? data.result.data : [];
-  const seats = rows.map((row, index) => normalizeSeat(row, side, index)).filter(x => x.seatName);
+  const normalized = rows.map((row, index) => normalizeSeat(row, side, index));
+  const seats = normalized.filter(x => x.seatName && x.missingAmountFields.length === 0);
   return {
     reportName,
     filter,
     rawCount: rows.length,
     sampleKeys: rows[0] ? Object.keys(rows[0]).slice(0, 80) : [],
     sampleRows: rows.slice(0, 3).map(compact),
+    invalidAmountRowCount: normalized.length - seats.length,
     seats,
   };
 }
 
 function summarize(buySeats, sellSeats) {
   const all = [...buySeats, ...sellSeats];
-  const buyTotal = all.reduce((s, x) => s + n(x.buyAmount), 0);
-  const sellTotal = all.reduce((s, x) => s + n(x.sellAmount), 0);
-  const netTotal = all.reduce((s, x) => s + n(x.netAmount), 0);
+  const buyTotal = all.reduce((s, x) => s + Number(x.buyAmount || 0), 0);
+  const sellTotal = all.reduce((s, x) => s + Number(x.sellAmount || 0), 0);
+  const netTotal = all.reduce((s, x) => s + Number(x.netAmount || 0), 0);
   return {
     buyTotal,
     sellTotal,
@@ -146,8 +157,8 @@ async function fetchSeat({ date, symbol }) {
     sellSeats: sell.seats,
     summary: summarize(buy.seats, sell.seats),
     attempts: [
-      { side: 'buy', reportName: buy.reportName, filter: buy.filter, rawCount: buy.rawCount, sampleKeys: buy.sampleKeys, sampleRows: buy.sampleRows },
-      { side: 'sell', reportName: sell.reportName, filter: sell.filter, rawCount: sell.rawCount, sampleKeys: sell.sampleKeys, sampleRows: sell.sampleRows },
+      { side: 'buy', reportName: buy.reportName, filter: buy.filter, rawCount: buy.rawCount, invalidAmountRowCount: buy.invalidAmountRowCount, sampleKeys: buy.sampleKeys, sampleRows: buy.sampleRows },
+      { side: 'sell', reportName: sell.reportName, filter: sell.filter, rawCount: sell.rawCount, invalidAmountRowCount: sell.invalidAmountRowCount, sampleKeys: sell.sampleKeys, sampleRows: sell.sampleRows },
     ],
     note: '数据源为东方财富 datacenter 个股龙虎榜买入/卖出席位表；游资/量化/拉萨标签为规则疑似识别，非官方身份确认。',
   });

@@ -14,7 +14,12 @@ module.exports = async (req, res) => {
         ...result.validation,
         mode: 'hot_sectors_v3',
         data: result.data,
-        diagnostics: { attempts: result.attempts },
+        diagnostics: {
+          attempts: result.attempts,
+          sources: result.sources,
+          availableKinds: result.availableKinds,
+          missingKinds: result.missingKinds,
+        },
       });
     }
     const sectors = [...result.data]
@@ -27,7 +32,12 @@ module.exports = async (req, res) => {
       source: result.source,
       count: sectors.length,
       data: sectors,
-      diagnostics: { attempts: result.attempts },
+      diagnostics: {
+        attempts: result.attempts,
+        sources: result.sources,
+        availableKinds: result.availableKinds,
+        missingKinds: result.missingKinds,
+      },
       updateTime: new Date().toISOString(),
     });
   } catch (err) {

@@ -253,8 +253,9 @@ function validateReviewMinimum(bundle) {
 
 function selectDragonTigerSeats(buySeats, sellSeats, tradeId) {
   const id = String(tradeId || '');
+  if (!id) return { buySeats: [], sellSeats: [] };
   const select = rows => (Array.isArray(rows) ? rows : [])
-    .filter(row => !id || String(row.tradeId || '') === id);
+    .filter(row => String(row.tradeId || '') === id);
   return {
     buySeats: select(buySeats),
     sellSeats: select(sellSeats),

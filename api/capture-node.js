@@ -185,40 +185,95 @@ module.exports = async (req, res) => {
     }));
   }
   const requestedNode = captureWindow.node;
-  const scheduledTargetNode = normalizeNode(req.query.scheduledNode) || requestedNode;
+  const scheduledNodeProvided = req.query.scheduledNode !== undefined
+    && req.query.scheduledNode !== null
+    && req.query.scheduledNode !== '';
+  const scheduledTargetNode = scheduledNodeProvided
+    ? normalizeNode(req.query.scheduledNode)
+    : requestedNode;
+  if (scheduledNodeProvided && !scheduledTargetNode) {
+    return json(res, 400, failure('INVALID_ARGUMENT', 'scheduledNode is not a valid China-time trading node', {
+      scheduledNode: req.query.scheduledNode,
+      scheduledNodes: TRADING_NODES,
+      chinaTime: cp.isoLike,
+    }));
+  }
+  if (scheduledTargetNode !== requestedNode) {
+    return json(res, 409, failure('DATA_INSUFFICIENT', 'Stale scheduler target does not match the actual eligible node', {
+      scheduledTargetNode,
+      actualEligibleNode: requestedNode,
+      chinaTime: cp.isoLike,
+      captureWindow,
+    }));
+  }
   const key = `astock:intraday:v2:${date}`;
 
   try {
-    const snapshot = await collectSnapshot(requestedNode, date, {
-      scheduledTargetNode,
-      captureLagMinutes: captureWindow.lagMinutes,
-      nodeResolution: captureWindow.resolution,
-    });
     const previousRaw = await redisCommand(['HGET', key, requestedNode]);
-    let previousSnapshot = null;
     if (previousRaw) {
+      let previousSnapshot = null;
       try {
         previousSnapshot = JSON.parse(previousRaw);
       } catch (error) {
         previousSnapshot = null;
       }
+      if (previousSnapshot) {
+        return json(res, 200, {
+          success: true,
+          status: 'DUPLICATE_IGNORED',
+          mode: 'saved_intraday_node_snapshot',
+          key,
+          storageSchema: 'redis_hash_by_scheduled_node_v3_first_valid_write',
+          date,
+          node: requestedNode,
+          timeZone: 'Asia/Shanghai',
+          scheduledTargetNode,
+          stored: false,
+          duplicatePolicy: 'first valid snapshot wins; later duplicate captures are ignored',
+          existingCapturedAt: previousSnapshot.capturedAt || null,
+          existingChinaTime: previousSnapshot.chinaTime || null,
+          updateTime: new Date().toISOString(),
+        });
+      }
     }
-    const replacedNode = Boolean(previousSnapshot);
-    snapshot.replacementCount = Number(previousSnapshot?.replacementCount || 0) + (replacedNode ? 1 : 0);
-    snapshot.replacedPreviousCapturedAt = previousSnapshot?.capturedAt || null;
-    await redisCommand(['HSET', key, requestedNode, JSON.stringify(snapshot)]);
-    await redisCommand(['EXPIRE', key, String(NODE_TTL_SECONDS)]);
-    const savedCount = Number(await redisCommand(['HLEN', key])) || 0;
 
+    const snapshot = await collectSnapshot(requestedNode, date, {
+      scheduledTargetNode,
+      captureLagMinutes: captureWindow.lagMinutes,
+      nodeResolution: captureWindow.resolution,
+    });
     const criticalFailures = ['marketOverview', 'marketSentiment', 'lianbanLadder', 'hotSectors']
       .filter(name => snapshot.componentStatus[name] !== 'ok');
     const success = criticalFailures.length === 0;
+    if (!success) {
+      return json(res, 503, {
+        success: false,
+        status: 'DATA_INSUFFICIENT',
+        mode: 'intraday_node_not_stored',
+        key,
+        date,
+        node: requestedNode,
+        timeZone: 'Asia/Shanghai',
+        actualChinaTime: snapshot.chinaTime,
+        scheduledTargetNode,
+        stored: false,
+        criticalFailures,
+        componentStatus: snapshot.componentStatus,
+        updateTime: new Date().toISOString(),
+      });
+    }
+
+    snapshot.replacementCount = 0;
+    snapshot.replacedPreviousCapturedAt = null;
+    const stored = Number(await redisCommand(['HSETNX', key, requestedNode, JSON.stringify(snapshot)])) === 1;
+    await redisCommand(['EXPIRE', key, String(NODE_TTL_SECONDS)]);
+    const savedCount = Number(await redisCommand(['HLEN', key])) || 0;
     return json(res, success ? 200 : 503, {
       success,
       status: success ? 'OK' : 'DATA_INSUFFICIENT',
       mode: 'saved_intraday_node_snapshot',
       key,
-      storageSchema: 'redis_hash_by_scheduled_node_v2',
+      storageSchema: 'redis_hash_by_scheduled_node_v3_first_valid_write',
       date,
       node: requestedNode,
       timeZone: 'Asia/Shanghai',
@@ -226,10 +281,11 @@ module.exports = async (req, res) => {
       scheduledTargetNode,
       captureLagMinutes: captureWindow.lagMinutes,
       nodeResolution: captureWindow.resolution,
-      replacedNode,
-      replacementCount: snapshot.replacementCount,
-      replacedPreviousCapturedAt: snapshot.replacedPreviousCapturedAt,
-      duplicatePolicy: 'replace the snapshot for the same scheduled node',
+      stored,
+      replacedNode: false,
+      replacementCount: 0,
+      replacedPreviousCapturedAt: null,
+      duplicatePolicy: 'first valid snapshot wins; later duplicate captures are ignored',
       savedCount,
       criticalFailures,
       componentStatus: snapshot.componentStatus,
