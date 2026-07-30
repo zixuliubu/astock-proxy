@@ -1,5 +1,5 @@
 const {
-  json, setCors, parseSymbols, secid, buildUrl, requestJson, requestJsonFallback,
+  json, setCors, parseSymbols, prefixedCode, secid, buildUrl, requestJson, requestJsonFallback,
   cached, okBase, wan, yi, num,
 } = require('./_stock-utils');
 const { failure, summarizeCumulativeFlow } = require('./_data-contracts');
@@ -15,6 +15,81 @@ const DAILY_HOSTS = [
   ['eastmoney_push2his_63', 'https://63.push2his.eastmoney.com'],
   ['eastmoney_push2his', 'https://push2his.eastmoney.com'],
 ];
+const SINA_MONEYFLOW_URL = 'https://money.finance.sina.com.cn/quotes_service/api/json_v2.php';
+
+function difference(row, left, right) {
+  const a = num(row?.[left]);
+  const b = num(row?.[right]);
+  return a === null || b === null ? null : a - b;
+}
+
+async function fetchSinaCurrentFlow(code, eastmoneyAttempts = []) {
+  const symbol = prefixedCode(code);
+  const snapshot = await requestJson(buildUrl(`${SINA_MONEYFLOW_URL}/MoneyFlow.ssi_ssfx_flzjtj`, { daima: symbol }), {
+    timeoutMs: 12000,
+    headers: { Referer: 'https://vip.stock.finance.sina.com.cn/moneyflow/' },
+  });
+  const mainNetYuan = difference(snapshot, 'r0_in', 'r0_out');
+  if (mainNetYuan === null) throw new Error('Sina current cumulative flow is unavailable');
+  return {
+    rows: [{
+      time: null,
+      mainNetYuan,
+      smallNetYuan: difference(snapshot, 'r3_in', 'r3_out'),
+      midNetYuan: difference(snapshot, 'r2_in', 'r2_out'),
+      largeNetYuan: null,
+      superNetYuan: null,
+      mainNetWan: wan(mainNetYuan),
+      largeNetWan: null,
+      superNetWan: null,
+      totalNetYuan: num(snapshot.netamount),
+      mode: 'minute_latest_cumulative',
+      pointCoverage: 'latest_only',
+      timestampSemantics: 'not_exposed_by_sina_current_snapshot',
+      providerSemantics: 'Sina r0 cumulative inflow minus r0 cumulative outflow',
+    }],
+    source: 'sina_moneyflow_current',
+    attempts: [...eastmoneyAttempts, { source: 'sina_moneyflow_current', status: 'ok' }],
+  };
+}
+
+async function fetchSinaDailyFlow(code, limit, eastmoneyAttempts = []) {
+  const data = await requestJson(buildUrl(`${SINA_MONEYFLOW_URL}/MoneyFlow.ssl_qsfx_zjlrqs`, {
+    daima: prefixedCode(code),
+    page: 1,
+    num: limit,
+    sort: 'opendate',
+    asc: 0,
+  }), {
+    timeoutMs: 10000,
+    headers: { Referer: 'https://vip.stock.finance.sina.com.cn/moneyflow/' },
+  });
+  if (!Array.isArray(data) || !data.length) throw new Error('Sina daily cumulative flow is unavailable');
+  const rows = data.map(row => {
+    const mainNetYuan = num(row.r0_net);
+    return {
+      time: row.opendate,
+      mainNetYuan,
+      smallNetYuan: null,
+      midNetYuan: null,
+      largeNetYuan: null,
+      superNetYuan: null,
+      mainNetWan: wan(mainNetYuan),
+      largeNetWan: null,
+      superNetWan: null,
+      totalNetYuan: num(row.netamount),
+      mode: 'daily',
+      providerSemantics: 'Sina r0_net daily cumulative value',
+    };
+  }).filter(row => row.time && row.mainNetYuan !== null)
+    .sort((left, right) => String(left.time).localeCompare(String(right.time)));
+  if (!rows.length) throw new Error('Sina daily cumulative flow contains no valid rows');
+  return {
+    rows,
+    source: 'sina_moneyflow_daily',
+    attempts: [...eastmoneyAttempts, { source: 'sina_moneyflow_daily', status: 'ok', rawCount: data.length }],
+  };
+}
 
 function parseFlowLine(line, mode) {
   const p = String(line || '').split(',');
@@ -47,22 +122,43 @@ async function fetchMinuteFlow(code) {
     ut: EASTMONEY_TOKEN,
     _: Date.now(),
   };
-  const result = await requestJsonFallback(MINUTE_HOSTS.map(([source, host]) => ({
-    source,
-    url: buildUrl(`${host}/api/qt/stock/fflow/kline/get`, params),
-  })), {
-    headers: {
-      Referer: 'https://data.eastmoney.com/zjlx/',
-      Origin: 'https://data.eastmoney.com',
-    },
-    timeoutMs: 4000,
-    accept: payload => Array.isArray(payload?.data?.klines) && payload.data.klines.length > 0,
-  });
-  return {
-    rows: result.data.data.klines.map(x => parseFlowLine(x, 'minute')).filter(Boolean),
-    source: result.source,
-    attempts: result.attempts,
+  const eastmoney = async () => {
+    const result = await requestJsonFallback(MINUTE_HOSTS.map(([source, host]) => ({
+      source,
+      url: buildUrl(`${host}/api/qt/stock/fflow/kline/get`, params),
+    })), {
+      headers: {
+        Referer: 'https://data.eastmoney.com/zjlx/',
+        Origin: 'https://data.eastmoney.com',
+      },
+      timeoutMs: 2500,
+      accept: payload => Array.isArray(payload?.data?.klines) && payload.data.klines.length > 0,
+    });
+    return {
+      rows: result.data.data.klines.map(x => parseFlowLine(x, 'minute')).filter(Boolean),
+      source: result.source,
+      attempts: result.attempts,
+    };
   };
+  try {
+    return await fetchSinaCurrentFlow(code);
+  } catch (sinaError) {
+    try {
+      const result = await eastmoney();
+      result.attempts.unshift({ source: 'sina_moneyflow_current', error: String(sinaError?.message || sinaError) });
+      return result;
+    } catch (eastmoneyError) {
+      const error = new Error([
+        `sina_moneyflow_current: ${String(sinaError?.message || sinaError)}`,
+        String(eastmoneyError?.message || eastmoneyError),
+      ].join('; '));
+      error.attempts = [
+        { source: 'sina_moneyflow_current', error: String(sinaError?.message || sinaError) },
+        ...(eastmoneyError.attempts || []),
+      ];
+      throw error;
+    }
+  }
 }
 
 async function fetchDailyFlow(code, limit = 20) {
@@ -75,19 +171,40 @@ async function fetchDailyFlow(code, limit = 20) {
     ut: EASTMONEY_TOKEN,
     _: Date.now(),
   };
-  const result = await requestJsonFallback(DAILY_HOSTS.map(([source, host]) => ({
-    source,
-    url: buildUrl(`${host}/api/qt/stock/fflow/daykline/get`, params),
-  })), {
-    headers: { Referer: 'https://data.eastmoney.com/zjlx/' },
-    timeoutMs: 4500,
-    accept: payload => Array.isArray(payload?.data?.klines) && payload.data.klines.length > 0,
-  });
-  return {
-    rows: result.data.data.klines.map(x => parseFlowLine(x, 'daily')).filter(Boolean),
-    source: result.source,
-    attempts: result.attempts,
+  const eastmoney = async () => {
+    const result = await requestJsonFallback(DAILY_HOSTS.map(([source, host]) => ({
+      source,
+      url: buildUrl(`${host}/api/qt/stock/fflow/daykline/get`, params),
+    })), {
+      headers: { Referer: 'https://data.eastmoney.com/zjlx/' },
+      timeoutMs: 3000,
+      accept: payload => Array.isArray(payload?.data?.klines) && payload.data.klines.length > 0,
+    });
+    return {
+      rows: result.data.data.klines.map(x => parseFlowLine(x, 'daily')).filter(Boolean),
+      source: result.source,
+      attempts: result.attempts,
+    };
   };
+  try {
+    return await fetchSinaDailyFlow(code, limit);
+  } catch (sinaError) {
+    try {
+      const result = await eastmoney();
+      result.attempts.unshift({ source: 'sina_moneyflow_daily', error: String(sinaError?.message || sinaError) });
+      return result;
+    } catch (eastmoneyError) {
+      const error = new Error([
+        `sina_moneyflow_daily: ${String(sinaError?.message || sinaError)}`,
+        String(eastmoneyError?.message || eastmoneyError),
+      ].join('; '));
+      error.attempts = [
+        { source: 'sina_moneyflow_daily', error: String(sinaError?.message || sinaError) },
+        ...(eastmoneyError.attempts || []),
+      ];
+      throw error;
+    }
+  }
 }
 
 async function fetchTurnover(code) {
@@ -191,7 +308,7 @@ module.exports = async (req, res) => {
 
   const results = await Promise.all(symbols.map(async code => {
     try {
-      const key = `stock-flow:v3:${code}:${range}:${dailyLimit}`;
+      const key = `stock-flow:v4:${code}:${range}:${dailyLimit}`;
       const { value, cached: fromCache } = await cached(key, ttlMs, () => fetchForCode(code, range, dailyLimit));
       return { ...value, cached: fromCache };
     } catch (err) {
@@ -211,8 +328,8 @@ module.exports = async (req, res) => {
     ...okBase({
       success,
       status: failures.some(item => item.validation?.status === 'CONFLICT') ? 'CONFLICT' : success ? 'OK' : 'DATA_INSUFFICIENT',
-      mode: 'stock_capital_flow_v3',
-      source: 'eastmoney_push2_multi_host_fflow_mature_library_contract',
+      mode: 'stock_capital_flow_v4',
+      source: 'eastmoney_fflow_with_independent_sina_moneyflow_fallback',
       range,
       count: data.length,
       data,
@@ -226,3 +343,5 @@ module.exports.parseFlowLine = parseFlowLine;
 module.exports.summarize = summarize;
 module.exports.fetchMinuteFlow = fetchMinuteFlow;
 module.exports.fetchForCode = fetchForCode;
+module.exports.fetchSinaCurrentFlow = fetchSinaCurrentFlow;
+module.exports.fetchSinaDailyFlow = fetchSinaDailyFlow;

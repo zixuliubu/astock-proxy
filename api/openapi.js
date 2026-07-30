@@ -79,7 +79,7 @@ const schema = {
   info: {
     title: 'A股实时行情API中转服务',
     description: '老大A股短线复盘系统：行情、涨停池、炸板池、连板梯队、板块资金流、观察池标签、盘中节点、复盘增强包与 MCP 工具入口。',
-    version: '1.10.0',
+    version: '1.10.1',
   },
   servers: [{ url: 'https://astock-proxy.vercel.app' }],
   paths: Object.fromEntries(endpoints.map(e => [`/api/${e[0]}`, pathFor(e)])),
