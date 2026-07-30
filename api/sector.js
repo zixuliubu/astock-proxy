@@ -12,7 +12,7 @@ module.exports = async (req, res) => {
     if (!result.success) {
       return res.status(503).json({
         ...result.validation,
-        mode: 'hot_sectors_v3',
+        mode: 'hot_sectors_v4',
         data: result.data,
         diagnostics: {
           attempts: result.attempts,
@@ -28,7 +28,7 @@ module.exports = async (req, res) => {
     return res.status(200).json({
       success: true,
       status: result.status,
-      mode: 'hot_sectors_v3',
+      mode: 'hot_sectors_v4',
       source: result.source,
       count: sectors.length,
       data: sectors,
@@ -43,7 +43,7 @@ module.exports = async (req, res) => {
   } catch (err) {
     return res.status(503).json({
       ...failure('UPSTREAM_FAILED', String(err?.message || err)),
-      mode: 'hot_sectors_v3',
+      mode: 'hot_sectors_v4',
       data: [],
     });
   }

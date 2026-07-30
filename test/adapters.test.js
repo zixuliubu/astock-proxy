@@ -188,6 +188,69 @@ test('minute stock flow falls back without changing cumulative semantics', async
   }
 });
 
+test('sector flow uses independent Sina money-flow fallback with explicit field semantics', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async url => {
+    const parsed = new URL(url);
+    if (parsed.host.includes('push2.eastmoney.com')) return mockResponse(502, {});
+    const kind = parsed.searchParams.get('fenlei') === '0' ? 'industry' : 'concept';
+    return mockResponse(200, [{
+      category: kind === 'industry' ? 'new_jrhy' : 'gn_rzrq',
+      name: kind === 'industry' ? '金融行业' : '融资融券',
+      avg_changeratio: '0.0123',
+      inamount: '700000000',
+      outamount: '500000000',
+      netamount: '200000000',
+      ratioamount: '0.1667',
+    }]);
+  };
+  try {
+    const result = await sectorFlow.fetchFlow('both', 10, 'mainNet');
+    assert.equal(result.success, true);
+    assert.equal(result.sources.industry, 'sina_moneyflow');
+    assert.equal(result.sources.concept, 'sina_moneyflow');
+    assert.equal(result.data[0].amountYi, 12);
+    assert.equal(result.data[0].netFlowYi, 2);
+    assert.equal(result.data[0].mainNetYi, null);
+    assert.match(result.data[0].missingReason, /not a main-order-only/);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('stock flow uses Sina exact latest cumulative r0 snapshot after Eastmoney failure', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async url => {
+    const parsed = new URL(url);
+    if (parsed.host.includes('push2.eastmoney.com')) return mockResponse(502, {});
+    if (parsed.pathname.includes('MoneyFlow.ssi_ssfx_flzjtj')) {
+      return mockResponse(200, {
+        r0_in: '350000000',
+        r0_out: '150000000',
+        r2_in: '20',
+        r2_out: '10',
+        r3_in: '8',
+        r3_out: '5',
+        netamount: '250000000',
+      });
+    }
+    throw new Error(`Unexpected URL ${url}`);
+  };
+  try {
+    const result = await stockFlow.fetchMinuteFlow('000533');
+    assert.equal(result.source, 'sina_moneyflow_current');
+    assert.equal(result.rows.length, 1);
+    assert.equal(result.rows[0].time, null);
+    assert.equal(result.rows[0].timestampSemantics, 'not_exposed_by_sina_current_snapshot');
+    assert.equal(result.rows[0].mainNetYuan, 200000000);
+    assert.equal(result.rows[0].pointCoverage, 'latest_only');
+    assert.equal(stockFlow.summarize(result.rows).latest.mainNetYuan, 200000000);
+    assert.equal(stockFlow.summarize(result.rows).aggregation, 'latest_cumulative_point');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test('dragon-tiger detail distinguishes verified not-on-list from an empty daily list', async () => {
   const originalFetch = global.fetch;
   try {

@@ -1,6 +1,6 @@
 const ASTOCK_BASE_URL = process.env.ASTOCK_BASE_URL || 'https://astock-proxy.vercel.app';
 const SERVER_NAME = 'astock-mcp';
-const SERVER_VERSION = '1.10.0';
+const SERVER_VERSION = '1.10.1';
 const PRIVATE_MCP_PATH = '/mcp-laoda-20260708-x7k29q';
 
 function schema(props = {}, required = []) { return { type: 'object', properties: props, required, additionalProperties: false }; }
