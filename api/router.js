@@ -21,6 +21,7 @@ const handlers = {
   'daily-review-plus': () => require('./daily-review-plus'),
   'stock-concepts': () => require('./stock-concepts'),
   'stock-popularity': () => require('./stock-popularity'),
+  'market-rankings': () => require('./market-rankings'),
   'stock-capital-flow': () => require('./stock-capital-flow'),
   'stock-news': () => require('./stock-news'),
   'stock-kline': () => require('./stock-kline'),
