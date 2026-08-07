@@ -94,7 +94,7 @@ theme = reason || conceptTags || industry || '待确认'
 }
 ```
 
-## 5. 测试覆盖
+## 5. 测试与 CI
 
 新增测试文件：
 
@@ -120,7 +120,14 @@ node --test test/limit-reason-patch.test.js
 # fail 0
 ```
 
-说明核心纯函数修复逻辑通过。完整仓库 `npm test` 需要在 GitHub/Codex/本地联网环境执行。
+GitHub Actions 已执行：
+
+```text
+Data interface tests / test
+npm ci: success
+npm test: success
+workflow conclusion: success
+```
 
 ## 6. 20260806 指定股票回归口径
 
@@ -157,6 +164,6 @@ curl "https://astock-proxy.vercel.app/api/router?endpoint=limit-reason&date=2026
 4. 行业/概念/新闻证据必须为 `context_only`；
 5. 若涨停池大于 0 但原因结果仍为 0，必须返回 `status=DATA_ANOMALY` 和 `LIMIT_REASON_EMPTY_WITH_NONEMPTY_POOL`。
 
-## 8. 当前未完成项
+## 8. 当前边界
 
-当前分支已完成源码修复、测试补充、PR 提交。由于本会话无法直接部署 Vercel 分支预览，也无法在当前容器联网克隆并执行完整仓库测试，完整生产链路回归需要在 PR 部署或合并后执行第 7 节命令。
+当前分支已完成源码修复、测试补充、PR 提交和 GitHub Actions 验收。由于本会话无法直接部署 Vercel 分支预览，生产域名的真实接口回归需要在 PR 部署或合并后执行第 7 节命令。
