@@ -51,8 +51,35 @@ async function requestSinaText(symbols) {
       signal: controller.signal,
     });
     const buf = Buffer.from(await response.arrayBuffer());
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return iconv.decode(buf, 'gbk');
+    if (!response.ok) {
+      const error = new Error(`HTTP ${response.status}`);
+      error.httpStatus = response.status;
+      throw error;
+    }
+    return { text: iconv.decode(buf, 'gbk'), httpStatus: response.status };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function requestTencentText(symbols) {
+  const list = symbols.map(prefixedCode).join(',');
+  const url = buildUrl('https://qt.gtimg.cn/q=' + list, {});
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 2500);
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { 'User-Agent': DEFAULT_UA, Referer: 'https://gu.qq.com/', Accept: '*/*' },
+      signal: controller.signal,
+    });
+    const buf = Buffer.from(await response.arrayBuffer());
+    if (!response.ok) {
+      const error = new Error(`HTTP ${response.status}`);
+      error.httpStatus = response.status;
+      throw error;
+    }
+    return { text: iconv.decode(buf, 'gb18030'), httpStatus: response.status };
   } finally {
     clearTimeout(timeout);
   }
@@ -74,6 +101,45 @@ function parseFiveLevels(fields, startIndex) {
 
 function compactLevel(levels) {
   return levels.filter(x => x.price !== null || x.volume !== null);
+}
+
+function hasUsableDepth(item) {
+  return [...(item.bid || []), ...(item.ask || [])]
+    .some(level => Number.isFinite(level.price) && level.price > 0 && Number.isFinite(level.volume));
+}
+
+function hasUsableSide(levels) {
+  return (levels || []).some(level => Number.isFinite(level.price) && level.price > 0 && Number.isFinite(level.volume));
+}
+
+function dataQualityFor(items, requestedCount) {
+  if (!items.length) return 'DATA_INSUFFICIENT';
+  const complete = items.length === requestedCount && items.every(item => hasUsableSide(item.bid) && hasUsableSide(item.ask));
+  return complete ? 'REALTIME_DEPTH' : 'PARTIAL_DEPTH';
+}
+
+function sanitizedError(error) {
+  const errorType = error?.name || 'Error';
+  if (errorType === 'AbortError') return { errorType, errorMessage: 'request timed out' };
+  return {
+    errorType,
+    errorMessage: String(error?.message || errorType).replace(/https?:\/\/\S+/gi, '[redacted-url]').slice(0, 180),
+  };
+}
+
+async function runProviderAttempt(provider, timeoutMs, load, parse) {
+  const startedAt = Date.now();
+  try {
+    const response = await load();
+    const rows = parse(response.text).filter(hasUsableDepth);
+    if (!rows.length) {
+      return { rows, attempt: { provider, status: 'parse_error', elapsedMs: Date.now() - startedAt, timeoutMs, httpStatus: response.httpStatus, errorType: 'ParseError', errorMessage: 'upstream response contained no usable five-level depth' } };
+    }
+    return { rows, attempt: { provider, status: 'ok', elapsedMs: Date.now() - startedAt, timeoutMs, httpStatus: response.httpStatus, errorType: null, errorMessage: null } };
+  } catch (error) {
+    const { errorType, errorMessage } = sanitizedError(error);
+    return { rows: [], attempt: { provider, status: errorType === 'AbortError' ? 'timeout' : error?.httpStatus ? 'http_error' : 'network_error', elapsedMs: Date.now() - startedAt, timeoutMs, httpStatus: Number.isInteger(error?.httpStatus) ? error.httpStatus : null, errorType, errorMessage } };
+  }
 }
 
 function frameDelta(code, item) {
@@ -221,6 +287,100 @@ function parseSinaQuotes(text, symbols, compare) {
   return symbols.map(code => byCode[code] || { code, success: false, error: 'No quote returned from sina' });
 }
 
+function parseTencentQuotes(text, symbols, compare) {
+  const byCode = {};
+  const re = /v_([a-z]{2})(\d{6})="([^"]*)";/g;
+  let match;
+  while ((match = re.exec(text))) {
+    const market = match[1];
+    const code = match[2];
+    const fields = (match[3] || '').split('~');
+    const name = fields[1] || '';
+    if (!name) continue;
+    const price = num(fields[3]);
+    const prevClose = num(fields[4]);
+    const bid = compactLevel(Array.from({ length: 5 }, (_, index) => ({
+      level: index + 1,
+      price: num(fields[9 + index * 2]),
+      volume: num(fields[10 + index * 2]),
+    })));
+    const ask = compactLevel(Array.from({ length: 5 }, (_, index) => ({
+      level: index + 1,
+      price: num(fields[19 + index * 2]),
+      volume: num(fields[20 + index * 2]),
+    })));
+    const bidTotal = bid.reduce((sum, level) => sum + (Number(level.volume) || 0), 0);
+    const askTotal = ask.reduce((sum, level) => sum + (Number(level.volume) || 0), 0);
+    const bestBid = bid[0]?.price ?? null;
+    const bestAsk = ask[0]?.price ?? null;
+    const item = {
+      code,
+      market,
+      name,
+      price,
+      changePct: (prevClose && price !== null) ? round(((price - prevClose) / prevClose) * 100, 2) : null,
+      open: num(fields[5]),
+      prevClose,
+      high: num(fields[33]),
+      low: num(fields[34]),
+      volume: num(fields[6]),
+      amountYi: yi(num(fields[37]) === null ? null : num(fields[37]) * 10000),
+      bid,
+      ask,
+      bidTotal,
+      askTotal,
+      pressureRatio: safeRatio(bidTotal, askTotal),
+      spread: (bestAsk !== null && bestBid !== null) ? round(bestAsk - bestBid, 3) : null,
+      quoteTime: fields[30] || '',
+      source: 'tencent',
+    };
+    const delta = compare ? frameDelta(code, item) : null;
+    if (!compare) prevFrames.set(code, { price, amountYi: item.amountYi, bidTotal, askTotal, at: Date.now() });
+    item.delta = delta;
+    item.strength = strengthFor(item, delta);
+    byCode[code] = item;
+  }
+  return symbols.map(code => byCode[code] || { code, success: false, error: 'No quote returned from tencent' });
+}
+
+function unavailableItem(code) {
+  return { code, success: false, error: 'No usable realtime depth returned' };
+}
+
+async function loadOrderbook(symbols, compare) {
+  const sina = await runProviderAttempt('sina', 2800, () => requestSinaText(symbols), text => parseSinaQuotes(text, symbols, compare));
+  const byCode = new Map(sina.rows.map(item => [item.code, item]));
+  const attempts = [sina.attempt];
+  let fallbackUsed = false;
+  if (byCode.size < symbols.length) {
+    const tencent = await runProviderAttempt('tencent', 2500, () => requestTencentText(symbols), text => parseTencentQuotes(text, symbols, compare));
+    attempts.push(tencent.attempt);
+    for (const item of tencent.rows) {
+      if (!byCode.has(item.code)) {
+        byCode.set(item.code, item);
+        fallbackUsed = true;
+      }
+    }
+  }
+  const usable = symbols.map(code => byCode.get(code)).filter(Boolean);
+  const success = usable.length > 0;
+  const dataQuality = dataQualityFor(usable, symbols.length);
+  const selected = [...new Set(usable.map(item => item.source))];
+  return okBase({
+    success,
+    status: success ? 'OK' : 'DATA_INSUFFICIENT',
+    mode: 'orderbook_lite_v1',
+    count: usable.length,
+    symbols,
+    data: success ? symbols.map(code => byCode.get(code) || unavailableItem(code)) : [],
+    missingSymbols: success ? symbols.filter(code => !byCode.has(code)) : symbols,
+    providerAttempts: attempts,
+    selectedProvider: selected.join('+') || null,
+    fallbackUsed,
+    dataQuality,
+  });
+}
+
 module.exports = async (req, res) => {
   if (setCors(req, res)) return;
   if (req.method !== 'GET') return json(res, 405, { success: false, error: 'Method not allowed' });
@@ -230,19 +390,20 @@ module.exports = async (req, res) => {
 
   const ttlMs = clamp(Number(req.query.ttlMs || 5000) || 5000, 1000, 10000);
   const compare = String(req.query.compare || '').toLowerCase() === 'true';
-  const key = `orderbook-lite:v1:${symbols.join(',')}:compare=${compare}`;
+  const key = `orderbook-lite:v2:${symbols.join(',')}:compare=${compare}`;
 
   try {
     const { value, cached: cacheHit } = await cached(key, ttlMs, async () => {
-      const text = await requestSinaText(symbols);
-      const data = parseSinaQuotes(text, symbols, compare);
-      return okBase({
-        mode: 'orderbook_lite_v1',
-        count: data.length,
-        symbols,
+      const value = await loadOrderbook(symbols, compare);
+      if (!value.success) {
+        const error = new Error('all realtime depth providers failed');
+        error.orderbook = value;
+        throw error;
+      }
+      return {
+        ...value,
         ttlMs,
         compare,
-        data,
         note: '轻量五档盘口，仅查询指定股票；不做全市场扫描，不写 Redis，不等同于 Level-2 逐笔盘口。',
         limits: {
           maxSymbols: 8,
@@ -250,10 +411,17 @@ module.exports = async (req, res) => {
           minTtlMs: 1000,
           maxTtlMs: 10000,
         },
-      });
+      };
     });
     return json(res, 200, { ...value, cacheHit });
   } catch (err) {
+    if (err?.orderbook) {
+      return json(res, 200, okBase({
+        ...err.orderbook,
+        success: false,
+        error: 'No usable realtime depth provider returned data',
+      }));
+    }
     return json(res, 200, okBase({
       success: false,
       mode: 'orderbook_lite_v1',
@@ -265,3 +433,7 @@ module.exports = async (req, res) => {
     }));
   }
 };
+
+module.exports.parseSinaQuotes = parseSinaQuotes;
+module.exports.parseTencentQuotes = parseTencentQuotes;
+module.exports.loadOrderbook = loadOrderbook;
