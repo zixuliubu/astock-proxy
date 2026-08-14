@@ -36,7 +36,17 @@ function labelRole(item) {
   return '观察';
 }
 
-function buildSummary(data) {
+function buildSummary(data, orderbookSuccess = true) {
+  if (!orderbookSuccess) {
+    return {
+      strongest: [],
+      weakest: [],
+      topAmount: [],
+      roles: [],
+      conclusion: '盘口数据不足，无法判断承接强弱。',
+      tradePermissionSupport: false,
+    };
+  }
   const valid = data.filter(x => x && x.name && x.strength);
   const byScore = [...valid].sort((a, b) => (b.strength.score || 0) - (a.strength.score || 0));
   const byAmount = [...valid].sort((a, b) => (b.amountYi || 0) - (a.amountYi || 0));
@@ -98,6 +108,9 @@ module.exports = async (req, res) => {
     const { value, cached: cacheHit } = await cached(cacheKey, ttlMs, async () => {
       const ob = await fetchOrderbook(symbols, ttlMs, compare);
       const data = Array.isArray(ob.data) ? ob.data : [];
+      const orderbookSuccess = ob.success !== false;
+      const dataQuality = ob.dataQuality || (orderbookSuccess ? 'PARTIAL_DEPTH' : 'DATA_INSUFFICIENT');
+      const tradePermissionSupport = orderbookSuccess && data.length > 0 && dataQuality === 'REALTIME_DEPTH';
       return okBase({
         mode: 'watchlist_orderbook_v1',
         group,
@@ -106,13 +119,18 @@ module.exports = async (req, res) => {
         count: data.length,
         ttlMs,
         compare,
-        orderbookSuccess: ob.success !== false,
+        orderbookSuccess,
+        dataQuality,
+        tradePermissionSupport,
         data,
-        summary: buildSummary(data),
+        summary: buildSummary(data, orderbookSuccess),
         upstream: {
           mode: ob.mode,
           cacheHit: ob.cacheHit,
           error: ob.error,
+          providerAttempts: ob.providerAttempts || [],
+          selectedProvider: ob.selectedProvider || null,
+          fallbackUsed: ob.fallbackUsed === true,
         },
         note: '观察池盘口聚合：只查指定观察池/自定义 symbols，最多8只；用于盘前固定池、盘中新增、打板票、趋势票的盘口确认。',
         limits: {
@@ -132,7 +150,9 @@ module.exports = async (req, res) => {
       symbols,
       error: String(err && err.message ? err.message : err),
       data: [],
-      summary: buildSummary([]),
+      dataQuality: 'DATA_INSUFFICIENT',
+      tradePermissionSupport: false,
+      summary: buildSummary([], false),
     }));
   }
 };
