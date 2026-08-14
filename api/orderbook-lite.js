@@ -112,10 +112,63 @@ function hasUsableSide(levels) {
   return (levels || []).some(level => Number.isFinite(level.price) && level.price > 0 && Number.isFinite(level.volume));
 }
 
+function hasUsableBestLevel(levels) {
+  const first = (levels || [])[0];
+  return Boolean(first && Number.isFinite(first.price) && first.price > 0 && Number.isFinite(first.volume));
+}
+
 function dataQualityFor(items, requestedCount) {
   if (!items.length) return 'DATA_INSUFFICIENT';
   const complete = items.length === requestedCount && items.every(item => hasUsableSide(item.bid) && hasUsableSide(item.ask));
   return complete ? 'REALTIME_DEPTH' : 'PARTIAL_DEPTH';
+}
+
+function limitPercentFor(code) {
+  if (/^(300|688)/.test(String(code))) return 20;
+  if (/^(4|8)/.test(String(code))) return 30;
+  if (/^(00|60)/.test(String(code))) return 10;
+  return null;
+}
+
+function isAtDailyLimit(item, direction) {
+  const limitPercent = limitPercentFor(item.code);
+  const boundary = direction === 'up' ? item.high : item.low;
+  if (limitPercent === null || !Number.isFinite(item.changePct) || !Number.isFinite(item.price) || !Number.isFinite(boundary)) return false;
+  const expected = direction === 'up' ? limitPercent : -limitPercent;
+  return Math.abs(item.changePct - expected) <= 0.15 && Math.abs(item.price - boundary) <= 0.001;
+}
+
+function marketStateFor(item) {
+  if (!hasUsableSide(item.ask) && isAtDailyLimit(item, 'up')) return 'LIMIT_UP_ONE_SIDED';
+  if (!hasUsableSide(item.bid) && isAtDailyLimit(item, 'down')) return 'LIMIT_DOWN_ONE_SIDED';
+  return 'NORMAL';
+}
+
+function applyDepthSemantics(item, dataQuality, compare) {
+  const complete = dataQuality === 'REALTIME_DEPTH' && hasUsableBestLevel(item.bid) && hasUsableBestLevel(item.ask);
+  item.marketState = marketStateFor(item);
+  if (!complete) {
+    prevFrames.delete(item.code);
+    item.pressureRatio = null;
+    item.spread = null;
+    item.delta = null;
+    item.strength = {
+      score: null,
+      label: '盘口深度不完整',
+      reasons: ['单边盘口或深度数据不完整，不判断承接强弱'],
+    };
+    return item;
+  }
+
+  const bestBid = item.bid[0].price;
+  const bestAsk = item.ask[0].price;
+  item.pressureRatio = safeRatio(item.bidTotal, item.askTotal);
+  item.spread = round(bestAsk - bestBid, 3);
+  const delta = compare ? frameDelta(item.code, item) : null;
+  if (!compare) prevFrames.set(item.code, { price: item.price, amountYi: item.amountYi, bidTotal: item.bidTotal, askTotal: item.askTotal, at: Date.now() });
+  item.delta = delta;
+  item.strength = strengthFor(item, delta);
+  return item;
 }
 
 function sanitizedError(error) {
@@ -251,10 +304,6 @@ function parseSinaQuotes(text, symbols, compare) {
     const ask = compactLevel(parseFiveLevels(fields, 20));
     const bidTotal = bid.reduce((s, x) => s + (Number(x.volume) || 0), 0);
     const askTotal = ask.reduce((s, x) => s + (Number(x.volume) || 0), 0);
-    const pressureRatio = safeRatio(bidTotal, askTotal);
-    const bestBid = bid[0]?.price ?? null;
-    const bestAsk = ask[0]?.price ?? null;
-    const spread = (bestAsk !== null && bestBid !== null) ? round(bestAsk - bestBid, 3) : null;
     const changePct = (prevClose && price !== null) ? round(((price - prevClose) / prevClose) * 100, 2) : null;
 
     const item = {
@@ -273,15 +322,11 @@ function parseSinaQuotes(text, symbols, compare) {
       ask,
       bidTotal,
       askTotal,
-      pressureRatio,
-      spread,
+      pressureRatio: null,
+      spread: null,
       quoteTime: `${fields[30] || ''} ${fields[31] || ''}`.trim(),
       source: 'sina',
     };
-    const delta = compare ? frameDelta(code, item) : null;
-    if (!compare) prevFrames.set(code, { price, amountYi, bidTotal, askTotal, at: Date.now() });
-    item.delta = delta;
-    item.strength = strengthFor(item, delta);
     byCode[code] = item;
   }
   return symbols.map(code => byCode[code] || { code, success: false, error: 'No quote returned from sina' });
@@ -311,8 +356,6 @@ function parseTencentQuotes(text, symbols, compare) {
     })));
     const bidTotal = bid.reduce((sum, level) => sum + (Number(level.volume) || 0), 0);
     const askTotal = ask.reduce((sum, level) => sum + (Number(level.volume) || 0), 0);
-    const bestBid = bid[0]?.price ?? null;
-    const bestAsk = ask[0]?.price ?? null;
     const item = {
       code,
       market,
@@ -329,15 +372,11 @@ function parseTencentQuotes(text, symbols, compare) {
       ask,
       bidTotal,
       askTotal,
-      pressureRatio: safeRatio(bidTotal, askTotal),
-      spread: (bestAsk !== null && bestBid !== null) ? round(bestAsk - bestBid, 3) : null,
+      pressureRatio: null,
+      spread: null,
       quoteTime: fields[30] || '',
       source: 'tencent',
     };
-    const delta = compare ? frameDelta(code, item) : null;
-    if (!compare) prevFrames.set(code, { price, amountYi: item.amountYi, bidTotal, askTotal, at: Date.now() });
-    item.delta = delta;
-    item.strength = strengthFor(item, delta);
     byCode[code] = item;
   }
   return symbols.map(code => byCode[code] || { code, success: false, error: 'No quote returned from tencent' });
@@ -366,13 +405,16 @@ async function loadOrderbook(symbols, compare) {
   const success = usable.length > 0;
   const dataQuality = dataQualityFor(usable, symbols.length);
   const selected = [...new Set(usable.map(item => item.source))];
+  const data = success
+    ? symbols.map(code => byCode.get(code) || unavailableItem(code)).map(item => item.success === false ? item : applyDepthSemantics(item, dataQuality, compare))
+    : [];
   return okBase({
     success,
     status: success ? 'OK' : 'DATA_INSUFFICIENT',
     mode: 'orderbook_lite_v1',
     count: usable.length,
     symbols,
-    data: success ? symbols.map(code => byCode.get(code) || unavailableItem(code)) : [],
+    data,
     missingSymbols: success ? symbols.filter(code => !byCode.has(code)) : symbols,
     providerAttempts: attempts,
     selectedProvider: selected.join('+') || null,

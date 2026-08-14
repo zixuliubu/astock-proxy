@@ -36,14 +36,14 @@ function labelRole(item) {
   return '观察';
 }
 
-function buildSummary(data, orderbookSuccess = true) {
-  if (!orderbookSuccess) {
+function buildSummary(data, orderbookSuccess = true, dataQuality = 'REALTIME_DEPTH') {
+  if (!orderbookSuccess || dataQuality !== 'REALTIME_DEPTH') {
     return {
       strongest: [],
       weakest: [],
       topAmount: [],
       roles: [],
-      conclusion: '盘口数据不足，无法判断承接强弱。',
+      conclusion: dataQuality === 'PARTIAL_DEPTH' ? '盘口深度不完整，无法判断承接强弱。' : '盘口数据不足，无法判断承接强弱。',
       tradePermissionSupport: false,
     };
   }
@@ -123,7 +123,7 @@ module.exports = async (req, res) => {
         dataQuality,
         tradePermissionSupport,
         data,
-        summary: buildSummary(data, orderbookSuccess),
+        summary: buildSummary(data, orderbookSuccess, dataQuality),
         upstream: {
           mode: ob.mode,
           cacheHit: ob.cacheHit,

@@ -12,14 +12,14 @@ function response(status, text) {
   };
 }
 
-function sinaLine(code, { askEmpty = false, bidEmpty = false } = {}) {
+function sinaLine(code, { askEmpty = false, bidEmpty = false, limitUp = false, limitDown = false } = {}) {
   const fields = Array(32).fill('');
   fields[0] = 'Sina Fixture';
   fields[1] = '10';
-  fields[2] = '9.8';
-  fields[3] = '10.2';
-  fields[4] = '10.3';
-  fields[5] = '9.7';
+  fields[2] = limitUp ? '9.27' : limitDown ? '10.89' : '9.8';
+  fields[3] = limitUp ? '10.2' : limitDown ? '9.8' : '10.2';
+  fields[4] = limitUp ? '10.2' : '10.3';
+  fields[5] = limitDown ? '9.8' : '9.7';
   fields[8] = '100000';
   fields[9] = '1000000';
   for (let index = 0; index < 5; index += 1) {
@@ -82,6 +82,10 @@ test('primary Sina depth succeeds without a Tencent fallback', async () => {
     assert.equal(result.fallbackUsed, false);
     assert.equal(result.dataQuality, 'REALTIME_DEPTH');
     assert.equal(result.providerAttempts.length, 1);
+    assert.equal(result.data[0].marketState, 'NORMAL');
+    assert.notEqual(result.data[0].strength.label, '盘口深度不完整');
+    assert.equal(Number.isFinite(result.data[0].strength.score), true);
+    assert.notEqual(result.data[0].spread, null);
   } finally {
     global.fetch = originalFetch;
   }
@@ -140,21 +144,40 @@ test('all depth sources fail closed and the failed result does not poison a late
   }
 });
 
-test('limit-up empty asks and limit-down empty bids remain real but explicitly partial depth', async () => {
+test('limit-up empty asks retains seal facts but suppresses two-sided strength semantics', async () => {
   const originalFetch = global.fetch;
-  global.fetch = async () => response(200, sinaLine('300404', { askEmpty: true }));
+  global.fetch = async () => response(200, sinaLine('600000', { askEmpty: true, limitUp: true }));
   try {
     resetCache();
-    const result = await call(orderbook, { symbols: '300404' });
+    const result = await call(orderbook, { symbols: '600000' });
     assert.equal(result.success, true);
     assert.equal(result.dataQuality, 'PARTIAL_DEPTH');
     assert.ok(result.data[0].bid.some(level => level.price > 0));
+    assert.equal(result.data[0].askTotal, 0);
+    assert.equal(result.data[0].spread, null);
+    assert.equal(result.data[0].pressureRatio, null);
+    assert.equal(result.data[0].strength.score, null);
+    assert.equal(result.data[0].strength.label, '盘口深度不完整');
+    assert.equal(result.data[0].marketState, 'LIMIT_UP_ONE_SIDED');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('limit-down empty bids remains real but suppresses two-sided strength semantics', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => response(200, sinaLine('600000', { bidEmpty: true, limitDown: true }));
+  try {
     resetCache();
-    global.fetch = async () => response(200, sinaLine('300404', { bidEmpty: true }));
-    const limitDown = await call(orderbook, { symbols: '300404' });
-    assert.equal(limitDown.success, true);
-    assert.equal(limitDown.dataQuality, 'PARTIAL_DEPTH');
-    assert.ok(limitDown.data[0].ask.some(level => level.price > 0));
+    const result = await call(orderbook, { symbols: '600000' });
+    assert.equal(result.success, true);
+    assert.equal(result.dataQuality, 'PARTIAL_DEPTH');
+    assert.ok(result.data[0].ask.some(level => level.price > 0));
+    assert.equal(result.data[0].spread, null);
+    assert.equal(result.data[0].pressureRatio, null);
+    assert.equal(result.data[0].strength.score, null);
+    assert.equal(result.data[0].strength.label, '盘口深度不完整');
+    assert.equal(result.data[0].marketState, 'LIMIT_DOWN_ONE_SIDED');
   } finally {
     global.fetch = originalFetch;
   }
@@ -185,6 +208,9 @@ test('watchlist does not treat a one-sided book as real-depth trading support', 
     assert.equal(result.orderbookSuccess, true);
     assert.equal(result.dataQuality, 'PARTIAL_DEPTH');
     assert.equal(result.tradePermissionSupport, false);
+    assert.deepEqual(result.summary.strongest, []);
+    assert.deepEqual(result.summary.weakest, []);
+    assert.match(result.summary.conclusion, /盘口深度不完整/);
   } finally {
     global.fetch = originalFetch;
   }
