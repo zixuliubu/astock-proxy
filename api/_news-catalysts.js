@@ -1,4 +1,5 @@
 const https = require('https');
+const { randomUUID } = require('node:crypto');
 
 class SourceError extends Error {
   constructor(code, httpStatus) { super(code); this.code = code; this.httpStatus = httpStatus; }
@@ -24,8 +25,12 @@ function fetchJson(url, headers) {
 
 function parseRows(payload, source) {
   // A recognized row container cannot override an explicit business failure.
-  // Do not infer success from undocumented provider-specific numeric codes.
   if (payload?.success === false) throw new SourceError('UPSTREAM_BUSINESS_FAILURE');
+  // These success codes are verified against the public website responses.
+  if ((source === 'eastmoney' && payload?.code !== undefined && ![1, '1'].includes(payload.code))
+    || (source === 'cls' && payload?.errno !== undefined && payload.errno !== 0)) {
+    throw new SourceError('UPSTREAM_BUSINESS_FAILURE');
+  }
   const container = payload?.data;
   const rows = source === 'eastmoney' ? container?.fastNewsList : container?.roll_data;
   const selected = Array.isArray(rows) ? rows : Array.isArray(container) ? container : null;
@@ -42,8 +47,8 @@ function parseRows(payload, source) {
 
 async function readSource(source) {
   const url = source === 'eastmoney'
-    ? `https://np-listapi.eastmoney.com/comm/web/getFastNewsList?client=web&biz=web_724&fastColumn=102&pageSize=30&_=${Date.now()}`
-    : `https://www.cls.cn/nodeapi/telegraphList?app=CailianpressWeb&category=&lastTime=&last_time=&os=web&rn=30&sv=8.4.6&_=${Date.now()}`;
+    ? `https://np-listapi.eastmoney.com/comm/web/getFastNewsList?client=web&biz=web_724&fastColumn=102&sortEnd=&pageSize=30&req_trace=${randomUUID()}`
+    : 'https://www.cls.cn/api/cache?name=telegraph';
   try {
     const rows = parseRows(await fetchJson(url, { 'User-Agent': 'Mozilla/5.0', Referer: source === 'eastmoney'
       ? 'https://kuaixun.eastmoney.com/' : 'https://www.cls.cn/telegraph' }), source);

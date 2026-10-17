@@ -3,10 +3,12 @@ const assert = require('node:assert/strict');
 const https = require('node:https');
 const { EventEmitter } = require('node:events');
 
-async function query(fixtures, endpoint = '../api/news-catalysts') {
+async function query(fixtures, endpoint = '../api/news-catalysts', verifyRequests) {
   const original = https.get;
   const calls = [];
+  const urls = [];
   https.get = (url, options, callback) => {
+    urls.push(new URL(url));
     calls.push(url.includes('eastmoney') ? 'eastmoney' : 'cls');
     const fixture = fixtures[calls.at(-1)];
     const request = new EventEmitter();
@@ -29,6 +31,7 @@ async function query(fixtures, endpoint = '../api/news-catalysts') {
     https.get = original;
   }
   assert.equal(calls.length, 2, 'exactly the existing two source calls; no retry');
+  if (verifyRequests) verifyRequests(urls);
   return result;
 }
 
@@ -112,6 +115,55 @@ test('two explicit business failures are failed, even with recognizable empty da
 test('explicit successful recognized empty containers remain confirmed empty', async () => {
   const result = await query({ eastmoney: { payload: { success: true, data: { fastNewsList: [] } } },
     cls: { payload: { success: true, data: { roll_data: [] } } } });
+  assert.equal(result.status, 'EMPTY');
+  assert.equal(result.confirmedEmpty, true);
+});
+
+for (const endpoint of ['../api/news-catalysts', '../api/extra']) {
+  test(`current public website requests and response envelopes: ${endpoint}`, async () => {
+    const result = await query({
+      eastmoney: { payload: { code: '1', message: 'success', data: { fastNewsList: [
+        { title: 'fixture eastmoney', summary: 'fixture summary', showTime: '2026-10-18 02:05:15' },
+      ] } } },
+      cls: { payload: { errno: 0, data: { roll_data: [
+        { title: 'fixture cls', content: 'fixture content', ctime: 1792257504 },
+      ] } } },
+    }, endpoint, urls => {
+      const [em, cls] = urls;
+      assert.equal(em.origin + em.pathname, 'https://np-listapi.eastmoney.com/comm/web/getFastNewsList');
+      assert.equal(em.searchParams.get('sortEnd'), '');
+      assert.match(em.searchParams.get('req_trace') || '', /^[0-9a-f-]{36}$/i);
+      assert.equal(em.searchParams.get('pageSize'), '30');
+      assert.equal(em.searchParams.get('fastColumn'), '102');
+      assert.equal(cls.href, 'https://www.cls.cn/api/cache?name=telegraph');
+    });
+    assert.equal(result.status, 'OK');
+    assert.equal(result.count, 2);
+    assert.equal(result.sourceDiagnostics.eastmoney.status, 'OK');
+    assert.equal(result.sourceDiagnostics.cls.status, 'OK');
+    assert.equal(result.data[0].time, '2026-10-18 02:05:15');
+    assert.equal(result.data[1].time, 1792257504);
+  });
+
+  for (const [source, failure] of [
+    ['eastmoney', { code: 0, message: "Required String parameter 'sortEnd' is not present", data: { fastNewsList: [] } }],
+    ['eastmoney', { code: '0', data: [{ title: 'must not escape failed envelope' }] }],
+    ['cls', { errno: 500, data: { roll_data: [] } }],
+    ['cls', { errno: 'unexpected', data: [{ title: 'must not escape failed envelope' }] }],
+  ]) {
+    test(`provider business failure overrides rows: ${endpoint} ${source} ${JSON.stringify(failure)}`, async () => {
+      const result = await query({ eastmoney: emEmpty, cls: clsEmpty, [source]: { payload: failure } }, endpoint);
+      assert.equal(result.status, 'PARTIAL');
+      assert.equal(result.confirmedEmpty, false);
+      assert.equal(result.sourceDiagnostics[source].error.code, 'UPSTREAM_BUSINESS_FAILURE');
+      assert.doesNotMatch(JSON.stringify(result), /Required String|must not escape/);
+    });
+  }
+}
+
+test('verified provider success codes preserve confirmed empty semantics', async () => {
+  const result = await query({ eastmoney: { payload: { code: '1', data: { fastNewsList: [] } } },
+    cls: { payload: { errno: 0, data: { roll_data: [] } } } });
   assert.equal(result.status, 'EMPTY');
   assert.equal(result.confirmedEmpty, true);
 });
