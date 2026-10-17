@@ -6,6 +6,10 @@
 
 两个新闻入口共享既有两次请求，不增加重试、fallback、定时器或改变鉴权。HTTP失败、HTML、无效JSON、未知形状/坏行均是来源失败，安全诊断不复制原始异常或响应正文。
 
+复审补充：即使HTTP200且有可识别的空数组，正文success=false也必须先判UPSTREAM_BUSINESS_FAILURE。
+不从未确认合同的数字code猜测成功含义。两个入口各覆盖直接数组、来源容器内数组；两源业务失败保留FAILED/count=null，
+单源业务失败保留PARTIAL/confirmedEmpty=false。首批新增5项回归在原HEAD全部失败，修复后通过；另覆盖失败响应带条目、显式成功的合法空结果。不保留业务错误正文或失败条目。
+
 - 两来源均可用且有条目：OK。
 - 两来源均返回已识别的空数组：EMPTY，confirmedEmpty=true。
 - 部分来源失败：PARTIAL，confirmedEmpty=false；即使count=0也不代表市场无消息。

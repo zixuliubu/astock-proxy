@@ -23,6 +23,9 @@ function fetchJson(url, headers) {
 }
 
 function parseRows(payload, source) {
+  // A recognized row container cannot override an explicit business failure.
+  // Do not infer success from undocumented provider-specific numeric codes.
+  if (payload?.success === false) throw new SourceError('UPSTREAM_BUSINESS_FAILURE');
   const container = payload?.data;
   const rows = source === 'eastmoney' ? container?.fastNewsList : container?.roll_data;
   const selected = Array.isArray(rows) ? rows : Array.isArray(container) ? container : null;

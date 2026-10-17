@@ -85,3 +85,33 @@ test('legacy extra news endpoint shares source-health semantics', async () => {
   assert.equal(result.status, 'PARTIAL');
   assert.equal(result.confirmedEmpty, false);
 });
+
+for (const endpoint of ['../api/news-catalysts', '../api/extra']) {
+  for (const data of [[], { fastNewsList: [] }, { fastNewsList: [{ title: 'invalid business result' }] }]) {
+    test(`explicit business failure cannot become confirmed empty: ${endpoint} ${JSON.stringify(data)}`, async () => {
+      const result = await query({ eastmoney: { payload: { success: false, data } }, cls: clsEmpty }, endpoint);
+      assert.equal(result.status, 'PARTIAL');
+      assert.equal(result.confirmedEmpty, false);
+      assert.equal(result.sourceDiagnostics.eastmoney.status, 'FAILED');
+      assert.equal(result.sourceDiagnostics.eastmoney.error.code, 'UPSTREAM_BUSINESS_FAILURE');
+      assert.doesNotMatch(JSON.stringify(result.data), /invalid business result/);
+    });
+  }
+}
+
+test('two explicit business failures are failed, even with recognizable empty data', async () => {
+  const failure = { payload: { success: false, data: [], message: 'private business error' } };
+  const result = await query({ eastmoney: failure, cls: failure });
+  assert.equal(result.status, 'FAILED');
+  assert.equal(result.success, false);
+  assert.equal(result.count, null);
+  assert.equal(result.confirmedEmpty, false);
+  assert.doesNotMatch(JSON.stringify(result), /private business error/);
+});
+
+test('explicit successful recognized empty containers remain confirmed empty', async () => {
+  const result = await query({ eastmoney: { payload: { success: true, data: { fastNewsList: [] } } },
+    cls: { payload: { success: true, data: { roll_data: [] } } } });
+  assert.equal(result.status, 'EMPTY');
+  assert.equal(result.confirmedEmpty, true);
+});
